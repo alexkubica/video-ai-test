@@ -267,6 +267,10 @@ function statusTone(status: string) {
   }
 }
 
+function isTerminalStatus(status: string) {
+  return ["completed", "failed", "cancelled", "expired"].includes(status);
+}
+
 function parseSizeLabel(size: string): SizeEstimate | null {
   const match = /^(\d+)x(\d+)$/.exec(size);
 
@@ -460,6 +464,10 @@ function getModelPageUrl(modelId: string) {
   return `https://openrouter.ai/${modelId}`;
 }
 
+function getVideoProxyUrl(jobId: string, index = 0) {
+  return `/api/jobs/${jobId}/content?index=${index}`;
+}
+
 function readableBytes(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -631,12 +639,19 @@ export default function Home() {
     [form, selectedModel],
   );
 
-  const jobElapsedSeconds = job?.createdAt
-    ? Math.max(
-        0,
-        Math.floor((nowMs - new Date(job.createdAt).getTime()) / 1000),
-      )
-    : 0;
+  const jobElapsedSeconds =
+    job?.createdAt && (job?.updatedAt || !isTerminalStatus(job.status))
+      ? Math.max(
+          0,
+          Math.floor(
+            (
+              (job.updatedAt && isTerminalStatus(job.status)
+                ? new Date(job.updatedAt).getTime()
+                : nowMs) - new Date(job.createdAt).getTime()
+            ) / 1000,
+          ),
+        )
+      : 0;
 
   const refreshHistory = useCallback(async () => {
     const response = await fetch("/api/history", { cache: "no-store" });
@@ -850,6 +865,18 @@ export default function Home() {
               <p className="max-w-2xl text-base leading-7 text-[var(--muted)] sm:text-lg">
                 The model list is loaded live from OpenRouter’s video models API,
                 so newly added providers appear without a redeploy.
+              </p>
+              <p className="max-w-2xl rounded-[1.25rem] border border-[var(--border)] bg-white/60 px-4 py-3 text-sm leading-6 text-[var(--muted)]">
+                Discovery can come from OpenRouter’s
+                <code className="mx-1 rounded bg-black/5 px-1.5 py-0.5 text-[0.9em]">
+                  /api/v1/models?output_modalities=video
+                </code>
+                endpoint, but this app validates actual generation options from
+                <code className="mx-1 rounded bg-black/5 px-1.5 py-0.5 text-[0.9em]">
+                  /api/v1/videos/models
+                </code>
+                because that endpoint exposes the real resolution, aspect ratio,
+                size, duration, and frame-image support matrix.
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
@@ -1387,16 +1414,17 @@ export default function Home() {
           </div>
 
           <div className="rounded-[1.6rem] border border-dashed border-[var(--border)] bg-white/60 p-4">
-            {job?.unsignedUrls[0] ? (
+            {job?.status === "completed" ? (
               <video
                 className="aspect-video w-full rounded-[1.2rem] bg-[#120d0a] object-cover"
                 controls
-                src={job.unsignedUrls[0]}
+                src={getVideoProxyUrl(job.id)}
               />
             ) : (
               <div className="flex aspect-video items-center justify-center rounded-[1.2rem] bg-[linear-gradient(135deg,rgba(191,90,54,0.12),rgba(255,255,255,0.8))] p-6 text-center text-sm leading-6 text-[var(--muted)]">
-                Generated clips will appear here as soon as OpenRouter marks the
-                job complete.
+                {job?.status === "completed"
+                  ? "OpenRouter marked the job complete, but no playable output is available yet."
+                  : "Generated clips will appear here as soon as OpenRouter marks the job complete."}
               </div>
             )}
           </div>
