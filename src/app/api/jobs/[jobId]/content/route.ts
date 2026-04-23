@@ -1,5 +1,3 @@
-import { getOpenRouterClient } from "@/lib/openrouter";
-
 function toSafeIndex(value: string | null) {
   if (!value) {
     return 0;
@@ -17,16 +15,54 @@ export async function GET(
     const { jobId } = await params;
     const { searchParams } = new URL(request.url);
     const index = toSafeIndex(searchParams.get("index"));
-    const openRouter = getOpenRouterClient();
-    const stream = await openRouter.videoGeneration.getVideoContent({
-      index,
-      jobId,
+    const apiKey = process.env.OPENROUTER_API_KEY;
+
+    if (!apiKey) {
+      return Response.json(
+        { error: "OPENROUTER_API_KEY is not configured." },
+        { status: 500 },
+      );
+    }
+
+    const upstreamUrl = new URL(
+      `https://openrouter.ai/api/v1/videos/${jobId}/content`,
+    );
+    upstreamUrl.searchParams.set("index", String(index));
+
+    const upstreamResponse = await fetch(upstreamUrl, {
+      headers: {
+        Accept: "application/octet-stream",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
+        "X-OpenRouter-Categories": "video-generation,web-app",
+        "X-OpenRouter-Title":
+          process.env.OPENROUTER_APP_NAME ?? "OpenRouter Video Studio",
+      },
+      method: "GET",
     });
 
-    return new Response(stream, {
+    if (!upstreamResponse.ok || !upstreamResponse.body) {
+      const bodyText = await upstreamResponse.text().catch(() => "");
+      console.error("Unable to load video content from OpenRouter", {
+        bodyText,
+        status: upstreamResponse.status,
+      });
+
+      return Response.json(
+        {
+          error:
+            bodyText ||
+            `Unable to load video content. OpenRouter returned ${upstreamResponse.status}.`,
+        },
+        { status: upstreamResponse.status || 500 },
+      );
+    }
+
+    return new Response(upstreamResponse.body, {
       headers: {
         "Cache-Control": "private, max-age=60",
-        "Content-Type": "video/mp4",
+        "Content-Type":
+          upstreamResponse.headers.get("content-type") ?? "application/octet-stream",
       },
       status: 200,
     });
