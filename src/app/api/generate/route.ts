@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AspectRatio, Resolution } from "@openrouter/sdk/models";
+import type { AspectRatio, ContentPartImage, Resolution } from "@openrouter/sdk/models";
 
 import { getOpenRouterClient } from "@/lib/openrouter";
 import type { VideoGenerationJob } from "@/lib/video-types";
@@ -23,6 +23,7 @@ export async function POST(request: Request) {
       aspectRatio?: string;
       duration?: number | string;
       generateAudio?: boolean;
+      inputReferences?: ContentPartImage[];
       model?: string;
       prompt?: string;
       resolution?: string;
@@ -45,6 +46,10 @@ export async function POST(request: Request) {
         aspectRatio: (body.aspectRatio || undefined) as AspectRatio | undefined,
         duration: toOptionalNumber(body.duration),
         generateAudio: body.generateAudio ? true : undefined,
+        inputReferences:
+          body.inputReferences && body.inputReferences.length
+            ? body.inputReferences
+            : undefined,
         model,
         prompt,
         resolution: (body.resolution || undefined) as Resolution | undefined,

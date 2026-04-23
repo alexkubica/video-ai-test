@@ -1,8 +1,16 @@
 "use client";
 
+import type { ChangeEvent, FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import type { VideoGenerationJob, VideoModel } from "@/lib/video-types";
+
+type ReferenceImage = {
+  dataUrl: string;
+  id: string;
+  name: string;
+  size: number;
+};
 
 type FormState = {
   aspectRatio: string;
@@ -10,12 +18,76 @@ type FormState = {
   generateAudio: boolean;
   modelId: string;
   prompt: string;
+  referenceImages: ReferenceImage[];
   resolution: string;
   seed: string;
 };
 
+type SizeEstimate = {
+  height: number;
+  label: string;
+  width: number;
+};
+
+type JobEstimate = {
+  cost: number | null;
+  costLabel: string;
+  method: string;
+  size: SizeEstimate | null;
+  videoTokens: number | null;
+};
+
 const INITIAL_PROMPT =
   "A handheld dolly shot through a neon-lit night market during light rain, cinematic reflections, shallow depth of field, realistic motion, subtle crowd movement.";
+
+const SIZE_PRESETS: Record<string, Record<string, SizeEstimate>> = {
+  "1:1": {
+    "1080p": { height: 1080, label: "1080x1080", width: 1080 },
+    "480p": { height: 480, label: "480x480", width: 480 },
+    "4K": { height: 2160, label: "2160x2160", width: 2160 },
+    "720p": { height: 720, label: "720x720", width: 720 },
+  },
+  "16:9": {
+    "1080p": { height: 1080, label: "1920x1080", width: 1920 },
+    "1K": { height: 1024, label: "1820x1024", width: 1820 },
+    "2K": { height: 1440, label: "2560x1440", width: 2560 },
+    "480p": { height: 480, label: "854x480", width: 854 },
+    "4K": { height: 2160, label: "3840x2160", width: 3840 },
+    "720p": { height: 720, label: "1280x720", width: 1280 },
+  },
+  "21:9": {
+    "1080p": { height: 1080, label: "2520x1080", width: 2520 },
+    "480p": { height: 480, label: "1120x480", width: 1120 },
+    "4K": { height: 2160, label: "5040x2160", width: 5040 },
+    "720p": { height: 720, label: "1680x720", width: 1680 },
+  },
+  "3:4": {
+    "1080p": { height: 1440, label: "1080x1440", width: 1080 },
+    "480p": { height: 640, label: "480x640", width: 480 },
+    "4K": { height: 2880, label: "2160x2880", width: 2160 },
+    "720p": { height: 960, label: "720x960", width: 720 },
+  },
+  "4:3": {
+    "1080p": { height: 1080, label: "1440x1080", width: 1440 },
+    "480p": { height: 480, label: "640x480", width: 640 },
+    "4K": { height: 2160, label: "2880x2160", width: 2880 },
+    "720p": { height: 720, label: "960x720", width: 960 },
+  },
+  "9:16": {
+    "1080p": { height: 1920, label: "1080x1920", width: 1080 },
+    "1K": { height: 1820, label: "1024x1820", width: 1024 },
+    "2K": { height: 2560, label: "1440x2560", width: 1440 },
+    "480p": { height: 854, label: "480x854", width: 480 },
+    "4K": { height: 3840, label: "2160x3840", width: 2160 },
+    "720p": { height: 1280, label: "720x1280", width: 720 },
+  },
+  "9:21": {
+    "1080p": { height: 2520, label: "1080x2520", width: 1080 },
+    "480p": { height: 1120, label: "480x1120", width: 480 },
+    "4K": { height: 5040, label: "2160x5040", width: 2160 },
+    "720p": { height: 1680, label: "720x1680", width: 720 },
+  },
+};
 
 function syncFormForModel(current: FormState, model: VideoModel): FormState {
   return {
@@ -57,6 +129,18 @@ function formatCurrency(value?: number | null) {
   }).format(value);
 }
 
+function formatEstimateCurrency(value: number | null) {
+  if (value === null) {
+    return "Unavailable";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    currency: "USD",
+    maximumFractionDigits: 4,
+    style: "currency",
+  }).format(value);
+}
+
 function formatDate(timestamp: number) {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
@@ -76,6 +160,215 @@ function statusTone(status: string) {
   }
 }
 
+function parseSizeLabel(size: string): SizeEstimate | null {
+  const match = /^(\d+)x(\d+)$/.exec(size);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    height: Number(match[2]),
+    label: size,
+    width: Number(match[1]),
+  };
+}
+
+function aspectRatioValue(aspectRatio: string) {
+  const [width, height] = aspectRatio.split(":").map(Number);
+
+  if (!width || !height) {
+    return null;
+  }
+
+  return width / height;
+}
+
+function isCloseAspect(size: SizeEstimate, aspectRatio: string) {
+  const target = aspectRatioValue(aspectRatio);
+
+  if (!target) {
+    return true;
+  }
+
+  const actual = size.width / size.height;
+  return Math.abs(actual - target) < 0.02;
+}
+
+function normalizeResolutionKey(resolution: string) {
+  if (resolution === "1K") {
+    return "1024p";
+  }
+
+  if (resolution === "2K") {
+    return "1440p";
+  }
+
+  return resolution.toLowerCase();
+}
+
+function pickEstimatedSize(
+  model: VideoModel,
+  resolution: string,
+  aspectRatio: string,
+): SizeEstimate | null {
+  const preset = SIZE_PRESETS[aspectRatio]?.[resolution];
+  const parsedSizes = model.supportedSizes
+    .map(parseSizeLabel)
+    .filter((size): size is SizeEstimate => Boolean(size));
+
+  if (preset && model.supportedSizes.includes(preset.label)) {
+    return preset;
+  }
+
+  if (preset) {
+    return preset;
+  }
+
+  if (!parsedSizes.length) {
+    return null;
+  }
+
+  const matchingAspect = parsedSizes.find((size) =>
+    isCloseAspect(size, aspectRatio),
+  );
+
+  return matchingAspect ?? parsedSizes[0];
+}
+
+function parseUnitPrice(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function estimateVideoTokens(
+  model: VideoModel,
+  form: Pick<FormState, "aspectRatio" | "duration" | "resolution">,
+) {
+  const duration = Number(form.duration);
+  const size = pickEstimatedSize(model, form.resolution, form.aspectRatio);
+
+  if (!duration || !size) {
+    return { size, videoTokens: null };
+  }
+
+  const videoTokens = Math.round((size.width * size.height * duration * 24) / 1024);
+  return { size, videoTokens };
+}
+
+function estimateJob(
+  model: VideoModel | null,
+  form: FormState,
+): JobEstimate | null {
+  if (!model || !form.duration || !form.resolution || !form.aspectRatio) {
+    return null;
+  }
+
+  const duration = Number(form.duration);
+
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return null;
+  }
+
+  const { size, videoTokens } = estimateVideoTokens(model, form);
+  const pricing = model.pricingSkus;
+  const resolutionKey = normalizeResolutionKey(form.resolution);
+
+  const tokenKey = form.generateAudio
+    ? pricing.video_tokens ?? pricing.video_tokens_with_audio
+    : pricing.video_tokens_without_audio ?? pricing.video_tokens;
+
+  const tokenRate = parseUnitPrice(tokenKey);
+
+  if (tokenRate !== null && videoTokens !== null) {
+    const cost = videoTokens * tokenRate;
+
+    return {
+      cost,
+      costLabel: formatEstimateCurrency(cost),
+      method:
+        "Estimated from OpenRouter video token pricing and the model-page token formula.",
+      size,
+      videoTokens,
+    };
+  }
+
+  const candidateDurationKeys = [
+    form.generateAudio && form.resolution === "4K"
+      ? "duration_seconds_with_audio_4k"
+      : null,
+    !form.generateAudio && form.resolution === "4K"
+      ? "duration_seconds_without_audio_4k"
+      : null,
+    form.generateAudio ? "duration_seconds_with_audio" : null,
+    !form.generateAudio ? "duration_seconds_without_audio" : null,
+    `text_to_video_duration_seconds_${resolutionKey}`,
+    `duration_seconds_${resolutionKey}`,
+    "duration_seconds",
+  ].filter((key): key is string => Boolean(key));
+
+  for (const key of candidateDurationKeys) {
+    const unitPrice = parseUnitPrice(pricing[key]);
+
+    if (unitPrice !== null) {
+      const cost = duration * unitPrice;
+
+      return {
+        cost,
+        costLabel: formatEstimateCurrency(cost),
+        method: `Estimated from OpenRouter pricing SKU "${key}".`,
+        size,
+        videoTokens,
+      };
+    }
+  }
+
+  return {
+    cost: null,
+    costLabel: "Unavailable",
+    method: "OpenRouter pricing metadata does not expose a directly usable estimator for this model.",
+    size,
+    videoTokens,
+  };
+}
+
+function getModelPageUrl(modelId: string) {
+  return `https://openrouter.ai/${modelId}`;
+}
+
+function readableBytes(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+async function fileToReferenceImage(file: File): Promise<ReferenceImage> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error(`Unable to read ${file.name}.`));
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(file);
+  });
+
+  return {
+    dataUrl,
+    id: `${file.name}-${file.lastModified}-${file.size}`,
+    name: file.name,
+    size: file.size,
+  };
+}
+
 export default function Home() {
   const [models, setModels] = useState<VideoModel[]>([]);
   const [modelsError, setModelsError] = useState("");
@@ -89,6 +382,7 @@ export default function Home() {
     generateAudio: true,
     modelId: "",
     prompt: INITIAL_PROMPT,
+    referenceImages: [],
     resolution: "",
     seed: "",
   });
@@ -145,6 +439,11 @@ export default function Home() {
     [form.modelId, models],
   );
 
+  const estimate = useMemo(
+    () => estimateJob(selectedModel, form),
+    [form, selectedModel],
+  );
+
   useEffect(() => {
     if (!job || !["pending", "in_progress"].includes(job.status)) {
       return;
@@ -167,7 +466,43 @@ export default function Home() {
     return () => window.clearInterval(poll);
   }, [job]);
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleReferenceImageChange(
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const files = Array.from(event.target.files ?? []);
+
+    if (!files.length) {
+      return;
+    }
+
+    try {
+      const nextImages = await Promise.all(files.map(fileToReferenceImage));
+
+      setForm((current) => ({
+        ...current,
+        referenceImages: [...current.referenceImages, ...nextImages],
+      }));
+    } catch (error) {
+      setJobError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load reference images.",
+      );
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  function removeReferenceImage(imageId: string) {
+    setForm((current) => ({
+      ...current,
+      referenceImages: current.referenceImages.filter(
+        (image) => image.id !== imageId,
+      ),
+    }));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setIsSubmitting(true);
@@ -179,6 +514,10 @@ export default function Home() {
           aspectRatio: form.aspectRatio || undefined,
           duration: form.duration || undefined,
           generateAudio: selectedModel?.generateAudio ? form.generateAudio : false,
+          inputReferences: form.referenceImages.map((image) => ({
+            imageUrl: { url: image.dataUrl },
+            type: "image_url",
+          })),
           model: form.modelId,
           prompt: form.prompt,
           resolution: form.resolution || undefined,
@@ -275,6 +614,24 @@ export default function Home() {
             </p>
             {selectedModel ? (
               <div className="mt-6 space-y-4 text-sm">
+                <div className="flex flex-wrap gap-3">
+                  <a
+                    className="inline-flex items-center rounded-full border border-[var(--border)] bg-white/80 px-4 py-2 font-medium text-[var(--foreground)] hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
+                    href={getModelPageUrl(selectedModel.id)}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    OpenRouter model page
+                  </a>
+                  <a
+                    className="inline-flex items-center rounded-full border border-[var(--border)] bg-white/80 px-4 py-2 font-medium text-[var(--foreground)] hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
+                    href="https://openrouter.ai/docs/guides/overview/multimodal/video-generation/"
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Video API docs
+                  </a>
+                </div>
                 <div>
                   <p className="font-medium text-[var(--foreground)]">Pricing</p>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -309,6 +666,7 @@ export default function Home() {
                     <p className="mt-2 font-medium">
                       {selectedModel.generateAudio ? "Video + audio" : "Video only"}
                       {selectedModel.seed ? " · Seeded" : ""}
+                      {selectedModel.supportedFrameImages.length ? " · Frame control" : ""}
                     </p>
                   </div>
                 </div>
@@ -463,6 +821,105 @@ export default function Home() {
             </label>
           </div>
 
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <label className="text-sm font-medium" htmlFor="reference-images">
+                Reference images
+              </label>
+              <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                Multi-upload
+              </span>
+            </div>
+            <input
+              accept="image/*"
+              className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
+              id="reference-images"
+              multiple
+              onChange={handleReferenceImageChange}
+              type="file"
+            />
+            <p className="text-sm leading-6 text-[var(--muted)]">
+              OpenRouter supports `input_references` for reference-to-video generation.
+              These images are sent as visual guidance, not exact first or last frames.
+            </p>
+            {form.referenceImages.length ? (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {form.referenceImages.map((image) => (
+                  <div
+                    key={image.id}
+                    className="overflow-hidden rounded-[1.4rem] border border-[var(--border)] bg-white/70"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      alt={image.name}
+                      className="aspect-square w-full object-cover"
+                      src={image.dataUrl}
+                    />
+                    <div className="space-y-2 p-3">
+                      <p className="truncate text-sm font-medium">{image.name}</p>
+                      <p className="text-xs text-[var(--muted)]">
+                        {readableBytes(image.size)}
+                      </p>
+                      <button
+                        className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
+                        onClick={() => removeReferenceImage(image.id)}
+                        type="button"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          {estimate ? (
+            <div className="space-y-4 rounded-[1.6rem] border border-[var(--border)] bg-white/70 p-4">
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm font-medium text-[var(--foreground)]">
+                  Job estimator
+                </p>
+                <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--accent-strong)]">
+                  Live pricing metadata
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl bg-[var(--panel)] p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Estimated cost
+                  </p>
+                  <p className="mt-2 text-lg font-semibold">{estimate.costLabel}</p>
+                </div>
+                <div className="rounded-2xl bg-[var(--panel)] p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Video tokens
+                  </p>
+                  <p className="mt-2 text-lg font-semibold">
+                    {estimate.videoTokens?.toLocaleString() ?? "N/A"}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-[var(--panel)] p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Size basis
+                  </p>
+                  <p className="mt-2 text-lg font-semibold">
+                    {estimate.size?.label ?? "Unknown"}
+                  </p>
+                </div>
+              </div>
+              <p className="text-sm leading-6 text-[var(--muted)]">
+                {estimate.method}
+              </p>
+              <p className="text-xs leading-5 text-[var(--muted)]">
+                Token estimate is shown when the selected model exposes token-style
+                pricing. The formula is model-specific and currently aligns with
+                OpenRouter’s token-based video model pages rather than a universal
+                cross-provider contract.
+              </p>
+            </div>
+          ) : null}
+
           {modelsError ? (
             <p className="rounded-2xl bg-rose-100 px-4 py-3 text-sm text-rose-800">
               {modelsError}
@@ -483,7 +940,12 @@ export default function Home() {
             </p>
             <button
               className="inline-flex items-center justify-center rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-white hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
-              disabled={isLoadingModels || isSubmitting || !form.modelId || !form.prompt.trim()}
+              disabled={
+                isLoadingModels ||
+                isSubmitting ||
+                !form.modelId ||
+                !form.prompt.trim()
+              }
               type="submit"
             >
               {isSubmitting ? "Submitting..." : "Generate video"}
