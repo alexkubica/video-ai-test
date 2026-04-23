@@ -16,10 +16,14 @@ type ReferenceImage = {
   size: number;
 };
 
+type FrameAsset = ReferenceImage | null;
+
 type FormState = {
   aspectRatio: string;
   duration: string;
+  firstFrameImage: FrameAsset;
   generateAudio: boolean;
+  lastFrameImage: FrameAsset;
   modelId: string;
   prompt: string;
   referenceImages: ReferenceImage[];
@@ -39,6 +43,12 @@ type JobEstimate = {
   method: string;
   size: SizeEstimate | null;
   videoTokens: number | null;
+};
+
+type SupportedCombo = {
+  aspectRatio: string;
+  resolution: string;
+  size: SizeEstimate;
 };
 
 const INITIAL_PROMPT =
@@ -93,24 +103,98 @@ const SIZE_PRESETS: Record<string, Record<string, SizeEstimate>> = {
   },
 };
 
-function syncFormForModel(current: FormState, model: VideoModel): FormState {
+const PRICING_OVERRIDES: Record<string, Record<string, number>> = {
+  "bytedance/seedance-2.0": {
+    "1080p": 0.3402,
+    "480p": 0.06726,
+    "720p": 0.1512,
+  },
+  "bytedance/seedance-2.0-fast": {
+    "1080p": 0.2722,
+    "480p": 0.0538,
+    "720p": 0.121,
+  },
+};
+
+function getSupportedCombos(model: VideoModel): SupportedCombo[] {
+  const combos: SupportedCombo[] = [];
+
+  for (const [aspectRatio, resolutions] of Object.entries(SIZE_PRESETS)) {
+    if (!model.supportedAspectRatios.includes(aspectRatio)) {
+      continue;
+    }
+
+    for (const [resolution, size] of Object.entries(resolutions)) {
+      if (!model.supportedResolutions.includes(resolution)) {
+        continue;
+      }
+
+      if (
+        model.supportedSizes.length > 0 &&
+        !model.supportedSizes.includes(size.label)
+      ) {
+        continue;
+      }
+
+      combos.push({ aspectRatio, resolution, size });
+    }
+  }
+
+  return combos;
+}
+
+function defaultComboForModel(model: VideoModel) {
+  const combos = getSupportedCombos(model);
+
+  if (model.id === "bytedance/seedance-2.0-fast") {
+    const cheapestCombo = combos.find(
+      (combo) => combo.aspectRatio === "1:1" && combo.resolution === "480p",
+    );
+
+    if (cheapestCombo) {
+      return {
+        aspectRatio: "1:1",
+        duration: model.supportedDurations.includes(4) ? "4" : String(model.supportedDurations[0] ?? ""),
+        resolution: "480p",
+      };
+    }
+  }
+
   return {
-    ...current,
-    aspectRatio: pickOption(current.aspectRatio, model.supportedAspectRatios),
-    duration: pickDuration(current.duration, model.supportedDurations),
-    generateAudio: model.generateAudio ? current.generateAudio : false,
-    modelId: model.id,
-    resolution: pickOption(current.resolution, model.supportedResolutions),
-    seed: model.seed ? current.seed : "",
+    aspectRatio: combos[0]?.aspectRatio ?? model.supportedAspectRatios[0] ?? "",
+    duration: String(model.supportedDurations[0] ?? ""),
+    resolution: combos[0]?.resolution ?? model.supportedResolutions[0] ?? "",
   };
 }
 
-function pickOption(current: string, supported: string[]) {
-  if (!supported.length) {
-    return "";
-  }
+function syncFormForModel(current: FormState, model: VideoModel): FormState {
+  const defaultCombo = defaultComboForModel(model);
+  const combos = getSupportedCombos(model);
+  const currentIsValid = combos.some(
+    (combo) =>
+      combo.aspectRatio === current.aspectRatio &&
+      combo.resolution === current.resolution,
+  );
 
-  return supported.includes(current) ? current : supported[0];
+  const nextCombo = currentIsValid
+    ? { aspectRatio: current.aspectRatio, resolution: current.resolution }
+    : defaultCombo;
+
+  return {
+    ...current,
+    aspectRatio: nextCombo.aspectRatio,
+    duration: pickDuration(defaultCombo.duration || current.duration, model.supportedDurations),
+    firstFrameImage: model.supportedFrameImages.includes("first_frame")
+      ? current.firstFrameImage
+      : null,
+    generateAudio: model.generateAudio ? current.generateAudio : false,
+    lastFrameImage: model.supportedFrameImages.includes("last_frame")
+      ? current.lastFrameImage
+      : null,
+    modelId: model.id,
+    resolution: nextCombo.resolution,
+    seed: model.seed ? current.seed : "",
+  };
 }
 
 function pickDuration(current: string, supported: number[]) {
@@ -300,6 +384,19 @@ function estimateJob(
   const { size, videoTokens } = estimateVideoTokens(model, form);
   const pricing = model.pricingSkus;
   const resolutionKey = normalizeResolutionKey(form.resolution);
+  const overridePrice = PRICING_OVERRIDES[model.id]?.[form.resolution];
+
+  if (overridePrice !== undefined) {
+    const cost = duration * overridePrice;
+
+    return {
+      cost,
+      costLabel: formatEstimateCurrency(cost),
+      method: `Estimated from current ${model.name} per-second pricing for ${form.resolution}.`,
+      size,
+      videoTokens,
+    };
+  }
 
   const tokenKey = form.generateAudio
     ? pricing.video_tokens ?? pricing.video_tokens_with_audio
@@ -392,6 +489,10 @@ async function fileToReferenceImage(file: File): Promise<ReferenceImage> {
   };
 }
 
+async function fileToFrameAsset(file: File): Promise<ReferenceImage> {
+  return fileToReferenceImage(file);
+}
+
 export default function Home() {
   const [models, setModels] = useState<VideoModel[]>([]);
   const [modelsError, setModelsError] = useState("");
@@ -404,7 +505,9 @@ export default function Home() {
   const [form, setForm] = useState<FormState>({
     aspectRatio: "",
     duration: "",
+    firstFrameImage: null,
     generateAudio: true,
+    lastFrameImage: null,
     modelId: "",
     prompt: INITIAL_PROMPT,
     referenceImages: [],
@@ -435,8 +538,13 @@ export default function Home() {
         if (!isCancelled) {
           setModels(nextModels);
 
-          if (nextModels[0]) {
-            setForm((current) => syncFormForModel(current, nextModels[0]));
+          const preferredModel =
+            nextModels.find(
+              (model) => model.id === "bytedance/seedance-2.0-fast",
+            ) ?? nextModels[0];
+
+          if (preferredModel) {
+            setForm((current) => syncFormForModel(current, preferredModel));
           }
         }
       } catch (error) {
@@ -498,6 +606,25 @@ export default function Home() {
     () => models.find((model) => model.id === form.modelId) ?? null,
     [form.modelId, models],
   );
+
+  const supportedCombos = useMemo(
+    () => (selectedModel ? getSupportedCombos(selectedModel) : []),
+    [selectedModel],
+  );
+
+  const availableResolutions = useMemo(() => {
+    const filtered = supportedCombos.filter(
+      (combo) => !form.aspectRatio || combo.aspectRatio === form.aspectRatio,
+    );
+    return [...new Set(filtered.map((combo) => combo.resolution))];
+  }, [form.aspectRatio, supportedCombos]);
+
+  const availableAspectRatios = useMemo(() => {
+    const filtered = supportedCombos.filter(
+      (combo) => !form.resolution || combo.resolution === form.resolution,
+    );
+    return [...new Set(filtered.map((combo) => combo.aspectRatio))];
+  }, [form.resolution, supportedCombos]);
 
   const estimate = useMemo(
     () => estimateJob(selectedModel, form),
@@ -598,12 +725,45 @@ export default function Home() {
     }
   }
 
+  async function handleFrameImageChange(
+    event: ChangeEvent<HTMLInputElement>,
+    field: "firstFrameImage" | "lastFrameImage",
+  ) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const nextImage = await fileToFrameAsset(file);
+
+      setForm((current) => ({
+        ...current,
+        [field]: nextImage,
+      }));
+    } catch (error) {
+      setJobError(
+        error instanceof Error ? error.message : "Unable to load frame image.",
+      );
+    } finally {
+      event.target.value = "";
+    }
+  }
+
   function removeReferenceImage(imageId: string) {
     setForm((current) => ({
       ...current,
       referenceImages: current.referenceImages.filter(
         (image) => image.id !== imageId,
       ),
+    }));
+  }
+
+  function removeFrameImage(field: "firstFrameImage" | "lastFrameImage") {
+    setForm((current) => ({
+      ...current,
+      [field]: null,
     }));
   }
 
@@ -618,6 +778,22 @@ export default function Home() {
         body: JSON.stringify({
           aspectRatio: form.aspectRatio || undefined,
           duration: form.duration || undefined,
+          frameImages: [
+            form.firstFrameImage
+              ? {
+                  frameType: "first_frame",
+                  imageUrl: { url: form.firstFrameImage.dataUrl },
+                  type: "image_url",
+                }
+              : null,
+            form.lastFrameImage
+              ? {
+                  frameType: "last_frame",
+                  imageUrl: { url: form.lastFrameImage.dataUrl },
+                  type: "image_url",
+                }
+              : null,
+          ].filter(Boolean),
           generateAudio: selectedModel?.generateAudio ? form.generateAudio : false,
           inputReferences: form.referenceImages.map((image) => ({
             imageUrl: { url: image.dataUrl },
@@ -840,16 +1016,31 @@ export default function Home() {
               <span>Resolution</span>
               <select
                 className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
-                disabled={!selectedModel?.supportedResolutions.length}
+                disabled={!availableResolutions.length}
                 onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    resolution: event.target.value,
-                  }))
+                  setForm((current) => {
+                    const nextResolution = event.target.value;
+                    const nextAspect =
+                      supportedCombos.find(
+                        (combo) =>
+                          combo.resolution === nextResolution &&
+                          combo.aspectRatio === current.aspectRatio,
+                      )?.aspectRatio ??
+                      supportedCombos.find(
+                        (combo) => combo.resolution === nextResolution,
+                      )?.aspectRatio ??
+                      current.aspectRatio;
+
+                    return {
+                      ...current,
+                      aspectRatio: nextAspect,
+                      resolution: nextResolution,
+                    };
+                  })
                 }
                 value={form.resolution}
               >
-                {selectedModel?.supportedResolutions.map((resolution) => (
+                {availableResolutions.map((resolution) => (
                   <option key={resolution} value={resolution}>
                     {resolution}
                   </option>
@@ -861,16 +1052,31 @@ export default function Home() {
               <span>Aspect ratio</span>
               <select
                 className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
-                disabled={!selectedModel?.supportedAspectRatios.length}
+                disabled={!availableAspectRatios.length}
                 onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    aspectRatio: event.target.value,
-                  }))
+                  setForm((current) => {
+                    const nextAspectRatio = event.target.value;
+                    const nextResolution =
+                      supportedCombos.find(
+                        (combo) =>
+                          combo.aspectRatio === nextAspectRatio &&
+                          combo.resolution === current.resolution,
+                      )?.resolution ??
+                      supportedCombos.find(
+                        (combo) => combo.aspectRatio === nextAspectRatio,
+                      )?.resolution ??
+                      current.resolution;
+
+                    return {
+                      ...current,
+                      aspectRatio: nextAspectRatio,
+                      resolution: nextResolution,
+                    };
+                  })
                 }
                 value={form.aspectRatio}
               >
-                {selectedModel?.supportedAspectRatios.map((aspectRatio) => (
+                {availableAspectRatios.map((aspectRatio) => (
                   <option key={aspectRatio} value={aspectRatio}>
                     {aspectRatio}
                   </option>
@@ -934,9 +1140,77 @@ export default function Home() {
           </div>
 
           <div className="space-y-3">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-3 rounded-[1.4rem] border border-[var(--border)] bg-white/70 p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <label className="text-sm font-medium" htmlFor="first-frame-image">
+                    First frame
+                  </label>
+                  <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                    Image-to-video
+                  </span>
+                </div>
+                <input
+                  accept="image/*"
+                  className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
+                  disabled={!selectedModel?.supportedFrameImages.includes("first_frame")}
+                  id="first-frame-image"
+                  onChange={(event) =>
+                    handleFrameImageChange(event, "firstFrameImage")
+                  }
+                  type="file"
+                />
+                {form.firstFrameImage ? (
+                  <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--panel)] p-3 text-sm">
+                    <span className="truncate">{form.firstFrameImage.name}</span>
+                    <button
+                      className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium"
+                      onClick={() => removeFrameImage("firstFrameImage")}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="space-y-3 rounded-[1.4rem] border border-[var(--border)] bg-white/70 p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <label className="text-sm font-medium" htmlFor="last-frame-image">
+                    Last frame
+                  </label>
+                  <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                    Image-to-video
+                  </span>
+                </div>
+                <input
+                  accept="image/*"
+                  className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
+                  disabled={!selectedModel?.supportedFrameImages.includes("last_frame")}
+                  id="last-frame-image"
+                  onChange={(event) =>
+                    handleFrameImageChange(event, "lastFrameImage")
+                  }
+                  type="file"
+                />
+                {form.lastFrameImage ? (
+                  <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--panel)] p-3 text-sm">
+                    <span className="truncate">{form.lastFrameImage.name}</span>
+                    <button
+                      className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium"
+                      onClick={() => removeFrameImage("lastFrameImage")}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
             <div className="flex items-center justify-between gap-4">
               <label className="text-sm font-medium" htmlFor="reference-images">
-                Reference images
+                Input references
               </label>
               <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
                 Multi-upload
@@ -951,8 +1225,9 @@ export default function Home() {
               type="file"
             />
             <p className="text-sm leading-6 text-[var(--muted)]">
-              OpenRouter supports `input_references` for reference-to-video generation.
-              These images are sent as visual guidance, not exact first or last frames.
+              OpenRouter supports `frame_images` for `first_frame` and `last_frame`,
+              and `input_references` for multiple reference images. If both are sent,
+              `frame_images` takes precedence and the request is treated as image-to-video.
             </p>
             {form.referenceImages.length ? (
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

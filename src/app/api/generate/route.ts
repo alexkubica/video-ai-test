@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import type { AspectRatio, ContentPartImage, Resolution } from "@openrouter/sdk/models";
+import type {
+  AspectRatio,
+  ContentPartImage,
+  FrameImage,
+  Resolution,
+} from "@openrouter/sdk/models";
 
 import { upsertJob } from "@/lib/job-store";
 import { getOpenRouterClient } from "@/lib/openrouter";
@@ -74,6 +79,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       aspectRatio?: string;
       duration?: number | string;
+      frameImages?: FrameImage[];
       generateAudio?: boolean;
       inputReferences?: ContentPartImage[];
       model?: string;
@@ -97,6 +103,8 @@ export async function POST(request: Request) {
       videoGenerationRequest: {
         aspectRatio: (body.aspectRatio || undefined) as AspectRatio | undefined,
         duration: toOptionalNumber(body.duration),
+        frameImages:
+          body.frameImages && body.frameImages.length ? body.frameImages : undefined,
         generateAudio: body.generateAudio ? true : undefined,
         inputReferences:
           body.inputReferences && body.inputReferences.length
