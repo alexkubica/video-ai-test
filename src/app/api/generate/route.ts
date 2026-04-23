@@ -7,7 +7,7 @@ import type {
 } from "@openrouter/sdk/models";
 
 import { upsertJob } from "@/lib/job-store";
-import { getOpenRouterClient } from "@/lib/openrouter";
+import { getApiKeyOverrideFromRequest, getOpenRouterClient } from "@/lib/openrouter";
 import type { PersistedVideoJob, VideoGenerationJob } from "@/lib/video-types";
 
 function toOptionalNumber(value: unknown) {
@@ -98,7 +98,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const openRouter = getOpenRouterClient();
+    const openRouter = getOpenRouterClient(getApiKeyOverrideFromRequest(request));
     const generation = await openRouter.videoGeneration.generate({
       videoGenerationRequest: {
         aspectRatio: (body.aspectRatio || undefined) as AspectRatio | undefined,
@@ -117,17 +117,19 @@ export async function POST(request: Request) {
       },
     });
 
+    const now = new Date().toISOString();
+
     const response: VideoGenerationJob = {
+      createdAt: now,
       error: generation.error,
       generationId: generation.generationId,
       id: generation.id,
       pollingUrl: generation.pollingUrl,
       status: generation.status,
       unsignedUrls: generation.unsignedUrls ?? [],
+      updatedAt: now,
       usage: generation.usage,
     };
-
-    const now = new Date().toISOString();
     const persistedJob: PersistedVideoJob = {
       ...response,
       aspectRatio: body.aspectRatio,

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getOpenRouterClient } from "@/lib/openrouter";
+import { getApiKeyOverrideFromRequest, getOpenRouterClient } from "@/lib/openrouter";
 import type { VideoModel } from "@/lib/video-types";
 
 function normalizeModel(model: {
@@ -37,9 +37,9 @@ function normalizeModel(model: {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const openRouter = getOpenRouterClient();
+    const openRouter = getOpenRouterClient(getApiKeyOverrideFromRequest(request));
     const result = await openRouter.videoGeneration.listVideosModels();
 
     const models = result.data

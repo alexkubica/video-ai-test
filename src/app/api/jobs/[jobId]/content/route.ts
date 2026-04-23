@@ -1,3 +1,5 @@
+import { getApiKeyOverrideFromRequest } from "@/lib/openrouter";
+
 function toSafeIndex(value: string | null) {
   if (!value) {
     return 0;
@@ -15,7 +17,8 @@ export async function GET(
     const { jobId } = await params;
     const { searchParams } = new URL(request.url);
     const index = toSafeIndex(searchParams.get("index"));
-    const apiKey = process.env.OPENROUTER_API_KEY;
+    const apiKey =
+      getApiKeyOverrideFromRequest(request) ?? process.env.OPENROUTER_API_KEY;
 
     if (!apiKey) {
       return Response.json(

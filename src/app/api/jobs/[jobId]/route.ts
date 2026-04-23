@@ -1,35 +1,37 @@
 import { NextResponse } from "next/server";
 
 import { getJob, upsertJob } from "@/lib/job-store";
-import { getOpenRouterClient } from "@/lib/openrouter";
+import { getApiKeyOverrideFromRequest, getOpenRouterClient } from "@/lib/openrouter";
 import type { PersistedVideoJob, VideoGenerationJob } from "@/lib/video-types";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ jobId: string }> },
 ) {
   try {
     const { jobId } = await params;
-    const openRouter = getOpenRouterClient();
+    const openRouter = getOpenRouterClient(getApiKeyOverrideFromRequest(request));
     const generation = await openRouter.videoGeneration.getGeneration({ jobId });
+    const existingJob = await getJob(jobId);
+    const now = new Date().toISOString();
 
     const response: VideoGenerationJob = {
+      createdAt: existingJob?.createdAt,
       error: generation.error,
       generationId: generation.generationId,
       id: generation.id,
       pollingUrl: generation.pollingUrl,
       status: generation.status,
       unsignedUrls: generation.unsignedUrls ?? [],
+      updatedAt: now,
       usage: generation.usage,
     };
-
-    const existingJob = await getJob(jobId);
 
     if (existingJob) {
       const persistedJob: PersistedVideoJob = {
         ...existingJob,
         ...response,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       };
 
       await upsertJob(persistedJob);

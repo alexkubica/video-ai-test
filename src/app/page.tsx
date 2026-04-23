@@ -51,6 +51,8 @@ type SupportedCombo = {
   size: SizeEstimate;
 };
 
+const POLL_INTERVAL_SECONDS = 10;
+
 const INITIAL_PROMPT =
   "A handheld dolly shot through a neon-lit night market during light rain, cinematic reflections, shallow depth of field, realistic motion, subtle crowd movement.";
 
@@ -252,6 +254,17 @@ function formatElapsed(totalSeconds: number) {
   }
 
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatDurationCompact(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+
+  return `${minutes}m ${seconds}s`;
 }
 
 function statusTone(status: string) {
@@ -509,7 +522,17 @@ export default function Home() {
   const [jobHistory, setJobHistory] = useState<PersistedVideoJob[]>([]);
   const [job, setJob] = useState<VideoGenerationJob | null>(null);
   const [jobError, setJobError] = useState("");
+  const [lastPollAtMs, setLastPollAtMs] = useState<number | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [userApiKey, setUserApiKey] = useState(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    return window.localStorage.getItem("openrouter_user_api_key") ?? "";
+  });
+  const [videoObjectUrl, setVideoObjectUrl] = useState<string | null>(null);
+  const [videoObjectJobId, setVideoObjectJobId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({
     aspectRatio: "",
     duration: "",
@@ -523,6 +546,23 @@ export default function Home() {
     seed: "",
   });
 
+  const authHeaders = useMemo(
+    (): Record<string, string> =>
+      userApiKey.trim()
+        ? { "x-openrouter-api-key": userApiKey.trim() }
+        : {},
+    [userApiKey],
+  );
+
+  useEffect(() => {
+    if (userApiKey.trim()) {
+      window.localStorage.setItem("openrouter_user_api_key", userApiKey.trim());
+      return;
+    }
+
+    window.localStorage.removeItem("openrouter_user_api_key");
+  }, [userApiKey]);
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -531,7 +571,10 @@ export default function Home() {
         setIsLoadingModels(true);
         setModelsError("");
 
-        const response = await fetch("/api/models", { cache: "no-store" });
+        const response = await fetch("/api/models", {
+          cache: "no-store",
+          headers: authHeaders,
+        });
         const payload = (await response.json()) as {
           error?: string;
           models?: VideoModel[];
@@ -573,7 +616,7 @@ export default function Home() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [authHeaders]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -653,6 +696,15 @@ export default function Home() {
         )
       : 0;
 
+  const nextPollAtMs =
+    job && !isTerminalStatus(job.status) && lastPollAtMs
+      ? lastPollAtMs + POLL_INTERVAL_SECONDS * 1000
+      : null;
+
+  const nextPollInSeconds = nextPollAtMs
+    ? Math.max(0, Math.ceil((nextPollAtMs - nowMs) / 1000))
+    : 0;
+
   const refreshHistory = useCallback(async () => {
     const response = await fetch("/api/history", { cache: "no-store" });
     const payload = (await response.json()) as {
@@ -669,7 +721,10 @@ export default function Home() {
   }, []);
 
   const refreshSelectedJob = useCallback(async (jobId: string) => {
-    const response = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
+    const response = await fetch(`/api/jobs/${jobId}`, {
+      cache: "no-store",
+      headers: authHeaders,
+    });
     const payload = (await response.json()) as VideoGenerationJob & {
       error?: string;
     };
@@ -681,9 +736,27 @@ export default function Home() {
     const jobs = await refreshHistory().catch(() => null);
     const persisted = jobs?.find((entry) => entry.id === jobId);
 
+    setLastPollAtMs(Date.now());
     setJob(persisted ?? payload);
     return persisted ?? payload;
-  }, [refreshHistory]);
+  }, [authHeaders, refreshHistory]);
+
+  const loadVideoContent = useCallback(async (jobId: string) => {
+    const response = await fetch(getVideoProxyUrl(jobId), {
+      cache: "no-store",
+      headers: authHeaders,
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      throw new Error(payload.error ?? "Unable to load video content.");
+    }
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  }, [authHeaders]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -708,10 +781,57 @@ export default function Home() {
             : "Unable to refresh job status.",
         );
       }
-    }, 5000);
+    }, POLL_INTERVAL_SECONDS * 1000);
 
-    return () => window.clearInterval(poll);
+    return () => {
+      window.clearInterval(poll);
+    };
   }, [job, refreshSelectedJob]);
+
+  useEffect(() => {
+    if (job?.status !== "completed") {
+      return;
+    }
+
+    let isCancelled = false;
+
+    void loadVideoContent(job.id)
+      .then((objectUrl) => {
+        if (isCancelled) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+
+        setVideoObjectUrl((current) => {
+          if (current) {
+            URL.revokeObjectURL(current);
+          }
+          return objectUrl;
+        });
+        setVideoObjectJobId(job.id);
+      })
+      .catch((error) => {
+        if (!isCancelled) {
+          setJobError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load video content.",
+          );
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [job?.id, job?.status, loadVideoContent]);
+
+  useEffect(() => {
+    return () => {
+      if (videoObjectUrl) {
+        URL.revokeObjectURL(videoObjectUrl);
+      }
+    };
+  }, [videoObjectUrl]);
 
   async function handleReferenceImageChange(
     event: ChangeEvent<HTMLInputElement>,
@@ -821,6 +941,7 @@ export default function Home() {
         }),
         headers: {
           "Content-Type": "application/json",
+          ...authHeaders,
         },
         method: "POST",
       });
@@ -838,6 +959,7 @@ export default function Home() {
       }
 
       setJob(payload);
+      setLastPollAtMs(Date.now());
       const jobs = await refreshHistory();
       const persisted = jobs.find((entry) => entry.id === payload.id);
       setJob(persisted ?? payload);
@@ -848,6 +970,10 @@ export default function Home() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function handleApiKeyChange(event: ChangeEvent<HTMLInputElement>) {
+    setUserApiKey(event.target.value);
   }
 
   return (
@@ -996,6 +1122,25 @@ export default function Home() {
           className="space-y-6 rounded-[2rem] border border-[var(--border)] bg-[var(--panel)] p-6 shadow-[var(--shadow)] backdrop-blur"
           onSubmit={handleSubmit}
         >
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="user-api-key">
+              OpenRouter API key
+            </label>
+            <input
+              autoComplete="off"
+              className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
+              id="user-api-key"
+              onChange={handleApiKeyChange}
+              placeholder="Optional: use your own OpenRouter key from this browser"
+              type="password"
+              value={userApiKey}
+            />
+            <p className="text-sm leading-6 text-[var(--muted)]">
+              If set, this browser sends the key to your app server on each request
+              and stores it locally in browser storage only.
+            </p>
+          </div>
+
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor="prompt">
               Prompt
@@ -1389,10 +1534,16 @@ export default function Home() {
           <div className="grid gap-3 sm:grid-cols-3">
             <article className="rounded-2xl bg-white/70 p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                Time since submit
+                {job && isTerminalStatus(job.status)
+                  ? "Generation time"
+                  : "Time since submit"}
               </p>
               <p className="mt-2 text-lg font-semibold">
-                {job ? formatElapsed(jobElapsedSeconds) : "0:00"}
+                {job
+                  ? isTerminalStatus(job.status)
+                    ? formatDurationCompact(jobElapsedSeconds)
+                    : formatElapsed(jobElapsedSeconds)
+                  : "0s"}
               </p>
             </article>
             <article className="rounded-2xl bg-white/70 p-4">
@@ -1405,25 +1556,33 @@ export default function Home() {
             </article>
             <article className="rounded-2xl bg-white/70 p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                Last update
+                {job && !isTerminalStatus(job.status)
+                  ? "Next poll"
+                  : "Last update"}
               </p>
               <p className="mt-2 text-sm font-semibold">
-                {job?.updatedAt ? formatDateTime(job.updatedAt) : "Pending"}
+                {job && !isTerminalStatus(job.status)
+                  ? `${nextPollInSeconds}s`
+                  : job?.updatedAt
+                    ? formatDateTime(job.updatedAt)
+                    : "Pending"}
               </p>
             </article>
           </div>
 
           <div className="rounded-[1.6rem] border border-dashed border-[var(--border)] bg-white/60 p-4">
-            {job?.status === "completed" ? (
+            {job?.status === "completed" &&
+            videoObjectUrl &&
+            videoObjectJobId === job.id ? (
               <video
                 className="aspect-video w-full rounded-[1.2rem] bg-[#120d0a] object-cover"
                 controls
-                src={getVideoProxyUrl(job.id)}
+                src={videoObjectUrl}
               />
             ) : (
               <div className="flex aspect-video items-center justify-center rounded-[1.2rem] bg-[linear-gradient(135deg,rgba(191,90,54,0.12),rgba(255,255,255,0.8))] p-6 text-center text-sm leading-6 text-[var(--muted)]">
                 {job?.status === "completed"
-                  ? "OpenRouter marked the job complete, but no playable output is available yet."
+                  ? "OpenRouter marked the job complete. Loading playable video..."
                   : "Generated clips will appear here as soon as OpenRouter marks the job complete."}
               </div>
             )}

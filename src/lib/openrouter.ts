@@ -19,8 +19,14 @@ function resolveSiteUrl() {
   return normalizeSiteUrl(configuredUrl);
 }
 
-export function getOpenRouterClient() {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+export function getApiKeyOverrideFromRequest(request: Request) {
+  const apiKey = request.headers.get("x-openrouter-api-key")?.trim();
+
+  return apiKey || undefined;
+}
+
+export function getOpenRouterClient(apiKeyOverride?: string) {
+  const apiKey = apiKeyOverride ?? process.env.OPENROUTER_API_KEY;
 
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not configured.");
