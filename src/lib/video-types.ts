@@ -16,6 +16,7 @@ export type VideoModel = {
 };
 
 export type VideoGenerationJob = {
+  createdAt?: string;
   errorCode?: string;
   errorHint?: string;
   error?: string;
@@ -28,6 +29,7 @@ export type VideoGenerationJob = {
     cost?: number | null;
     isByok?: boolean | null;
   };
+  updatedAt?: string;
 };
 
 export type PersistedVideoJob = VideoGenerationJob & {

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChangeEvent, FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   PersistedVideoJob,
@@ -156,6 +156,18 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function formatElapsed(totalSeconds: number) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function statusTone(status: string) {
@@ -388,6 +400,7 @@ export default function Home() {
   const [jobHistory, setJobHistory] = useState<PersistedVideoJob[]>([]);
   const [job, setJob] = useState<VideoGenerationJob | null>(null);
   const [jobError, setJobError] = useState("");
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [form, setForm] = useState<FormState>({
     aspectRatio: "",
     duration: "",
@@ -491,35 +504,72 @@ export default function Home() {
     [form, selectedModel],
   );
 
+  const jobElapsedSeconds = job?.createdAt
+    ? Math.max(
+        0,
+        Math.floor((nowMs - new Date(job.createdAt).getTime()) / 1000),
+      )
+    : 0;
+
+  const refreshHistory = useCallback(async () => {
+    const response = await fetch("/api/history", { cache: "no-store" });
+    const payload = (await response.json()) as {
+      error?: string;
+      jobs?: PersistedVideoJob[];
+    };
+
+    if (!response.ok || !payload.jobs) {
+      throw new Error(payload.error ?? "Unable to load job history.");
+    }
+
+    setJobHistory(payload.jobs);
+    return payload.jobs;
+  }, []);
+
+  const refreshSelectedJob = useCallback(async (jobId: string) => {
+    const response = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
+    const payload = (await response.json()) as VideoGenerationJob & {
+      error?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? "Unable to refresh job status.");
+    }
+
+    const jobs = await refreshHistory().catch(() => null);
+    const persisted = jobs?.find((entry) => entry.id === jobId);
+
+    setJob(persisted ?? payload);
+    return persisted ?? payload;
+  }, [refreshHistory]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     if (!job || !["pending", "in_progress"].includes(job.status)) {
       return;
     }
 
     const poll = window.setInterval(async () => {
-      const response = await fetch(`/api/jobs/${job.id}`, { cache: "no-store" });
-      const payload = (await response.json()) as VideoGenerationJob & {
-        error?: string;
-      };
-
-      if (!response.ok) {
-        setJobError(payload.error ?? "Unable to refresh job status.");
-        return;
+      try {
+        await refreshSelectedJob(job.id);
+      } catch (error) {
+        setJobError(
+          error instanceof Error
+            ? error.message
+            : "Unable to refresh job status.",
+        );
       }
-
-      setJob(payload);
-      void fetch("/api/history", { cache: "no-store" })
-        .then((historyResponse) => historyResponse.json())
-        .then((historyPayload: { jobs?: PersistedVideoJob[] }) => {
-          if (historyPayload.jobs) {
-            setJobHistory(historyPayload.jobs);
-          }
-        })
-        .catch(() => undefined);
     }, 5000);
 
     return () => window.clearInterval(poll);
-  }, [job]);
+  }, [job, refreshSelectedJob]);
 
   async function handleReferenceImageChange(
     event: ChangeEvent<HTMLInputElement>,
@@ -597,14 +647,9 @@ export default function Home() {
       }
 
       setJob(payload);
-      const historyResponse = await fetch("/api/history", { cache: "no-store" });
-      const historyPayload = (await historyResponse.json()) as {
-        jobs?: PersistedVideoJob[];
-      };
-
-      if (historyPayload.jobs) {
-        setJobHistory(historyPayload.jobs);
-      }
+      const jobs = await refreshHistory();
+      const persisted = jobs.find((entry) => entry.id === payload.id);
+      setJob(persisted ?? payload);
     } catch (error) {
       setJobError(
         error instanceof Error ? error.message : "Unable to start generation.",
@@ -1039,6 +1084,33 @@ export default function Home() {
             </span>
           </div>
 
+          <div className="grid gap-3 sm:grid-cols-3">
+            <article className="rounded-2xl bg-white/70 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                Time since submit
+              </p>
+              <p className="mt-2 text-lg font-semibold">
+                {job ? formatElapsed(jobElapsedSeconds) : "0:00"}
+              </p>
+            </article>
+            <article className="rounded-2xl bg-white/70 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                Submitted
+              </p>
+              <p className="mt-2 text-sm font-semibold">
+                {job?.createdAt ? formatDateTime(job.createdAt) : "Pending"}
+              </p>
+            </article>
+            <article className="rounded-2xl bg-white/70 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                Last update
+              </p>
+              <p className="mt-2 text-sm font-semibold">
+                {job?.updatedAt ? formatDateTime(job.updatedAt) : "Pending"}
+              </p>
+            </article>
+          </div>
+
           <div className="rounded-[1.6rem] border border-dashed border-[var(--border)] bg-white/60 p-4">
             {job?.unsignedUrls[0] ? (
               <video
@@ -1112,7 +1184,17 @@ export default function Home() {
                   <button
                     key={historyJob.id}
                     className="w-full rounded-[1.2rem] border border-[var(--border)] bg-white/70 p-4 text-left hover:border-[var(--accent)]"
-                    onClick={() => setJob(historyJob)}
+                    onClick={() => {
+                      setJob(historyJob);
+                      setJobError("");
+                      void refreshSelectedJob(historyJob.id).catch((error) => {
+                        setJobError(
+                          error instanceof Error
+                            ? error.message
+                            : "Unable to refresh job status.",
+                        );
+                      });
+                    }}
                     type="button"
                   >
                     <div className="flex items-center justify-between gap-3">
