@@ -27,3 +27,16 @@ export type VideoGenerationJob = {
     isByok?: boolean | null;
   };
 };
+
+export type PersistedVideoJob = VideoGenerationJob & {
+  aspectRatio?: string;
+  createdAt: string;
+  duration?: number | null;
+  generateAudio?: boolean;
+  model: string;
+  prompt: string;
+  referenceImageCount: number;
+  resolution?: string;
+  seed?: number | null;
+  updatedAt: string;
+};

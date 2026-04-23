@@ -48,6 +48,8 @@ export async function GET() {
 
     return NextResponse.json({ models });
   } catch (error) {
+    console.error("Unable to load video models", error);
+
     const message =
       error instanceof Error ? error.message : "Unable to load video models.";
 

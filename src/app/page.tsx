@@ -3,7 +3,11 @@
 import type { ChangeEvent, FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import type { VideoGenerationJob, VideoModel } from "@/lib/video-types";
+import type {
+  PersistedVideoJob,
+  VideoGenerationJob,
+  VideoModel,
+} from "@/lib/video-types";
 
 type ReferenceImage = {
   dataUrl: string;
@@ -145,6 +149,13 @@ function formatDate(timestamp: number) {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
   }).format(new Date(timestamp * 1000));
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function statusTone(status: string) {
@@ -374,6 +385,7 @@ export default function Home() {
   const [modelsError, setModelsError] = useState("");
   const [isLoadingModels, setIsLoadingModels] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [jobHistory, setJobHistory] = useState<PersistedVideoJob[]>([]);
   const [job, setJob] = useState<VideoGenerationJob | null>(null);
   const [jobError, setJobError] = useState("");
   const [form, setForm] = useState<FormState>({
@@ -434,6 +446,41 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadHistory() {
+      try {
+        const response = await fetch("/api/history", { cache: "no-store" });
+        const payload = (await response.json()) as {
+          error?: string;
+          jobs?: PersistedVideoJob[];
+        };
+
+        if (!response.ok || !payload.jobs) {
+          throw new Error(payload.error ?? "Unable to load job history.");
+        }
+
+        if (!isCancelled) {
+          setJobHistory(payload.jobs);
+          setJob((current) => current ?? payload.jobs?.[0] ?? null);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setJobError(
+            error instanceof Error ? error.message : "Unable to load job history.",
+          );
+        }
+      }
+    }
+
+    loadHistory();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
   const selectedModel = useMemo(
     () => models.find((model) => model.id === form.modelId) ?? null,
     [form.modelId, models],
@@ -461,6 +508,14 @@ export default function Home() {
       }
 
       setJob(payload);
+      void fetch("/api/history", { cache: "no-store" })
+        .then((historyResponse) => historyResponse.json())
+        .then((historyPayload: { jobs?: PersistedVideoJob[] }) => {
+          if (historyPayload.jobs) {
+            setJobHistory(historyPayload.jobs);
+          }
+        })
+        .catch(() => undefined);
     }, 5000);
 
     return () => window.clearInterval(poll);
@@ -538,6 +593,14 @@ export default function Home() {
       }
 
       setJob(payload);
+      const historyResponse = await fetch("/api/history", { cache: "no-store" });
+      const historyPayload = (await historyResponse.json()) as {
+        jobs?: PersistedVideoJob[];
+      };
+
+      if (historyPayload.jobs) {
+        setJobHistory(historyPayload.jobs);
+      }
     } catch (error) {
       setJobError(
         error instanceof Error ? error.message : "Unable to start generation.",
@@ -1027,6 +1090,60 @@ export default function Home() {
                   {item}
                 </span>
               ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm font-medium text-[var(--foreground)]">
+                Local job history
+              </p>
+              <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                Stored in `.data/video-jobs.json`
+              </span>
+            </div>
+            <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+              {jobHistory.length ? (
+                jobHistory.map((historyJob) => (
+                  <button
+                    key={historyJob.id}
+                    className="w-full rounded-[1.2rem] border border-[var(--border)] bg-white/70 p-4 text-left hover:border-[var(--accent)]"
+                    onClick={() => setJob(historyJob)}
+                    type="button"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="truncate text-sm font-semibold">
+                        {historyJob.model}
+                      </p>
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${statusTone(
+                          historyJob.status,
+                        )}`}
+                      >
+                        {historyJob.status}
+                      </span>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
+                      {historyJob.prompt}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-[var(--muted)]">
+                      <span>{formatDateTime(historyJob.createdAt)}</span>
+                      <span>{historyJob.resolution ?? "No resolution"}</span>
+                      <span>
+                        {historyJob.duration ? `${historyJob.duration}s` : "No duration"}
+                      </span>
+                      <span>
+                        {historyJob.referenceImageCount} reference
+                        {historyJob.referenceImageCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="rounded-[1.2rem] border border-dashed border-[var(--border)] bg-white/60 p-4 text-sm text-[var(--muted)]">
+                  No persisted jobs yet.
+                </div>
+              )}
             </div>
           </div>
         </section>

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import type { AspectRatio, ContentPartImage, Resolution } from "@openrouter/sdk/models";
 
+import { upsertJob } from "@/lib/job-store";
 import { getOpenRouterClient } from "@/lib/openrouter";
-import type { VideoGenerationJob } from "@/lib/video-types";
+import type { PersistedVideoJob, VideoGenerationJob } from "@/lib/video-types";
 
 function toOptionalNumber(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -67,8 +68,27 @@ export async function POST(request: Request) {
       usage: generation.usage,
     };
 
+    const now = new Date().toISOString();
+    const persistedJob: PersistedVideoJob = {
+      ...response,
+      aspectRatio: body.aspectRatio,
+      createdAt: now,
+      duration: toOptionalNumber(body.duration) ?? null,
+      generateAudio: Boolean(body.generateAudio),
+      model,
+      prompt,
+      referenceImageCount: body.inputReferences?.length ?? 0,
+      resolution: body.resolution,
+      seed: toOptionalNumber(body.seed) ?? null,
+      updatedAt: now,
+    };
+
+    await upsertJob(persistedJob);
+
     return NextResponse.json(response, { status: 202 });
   } catch (error) {
+    console.error("Video generation request failed", error);
+
     const message =
       error instanceof Error ? error.message : "Unable to start generation.";
 

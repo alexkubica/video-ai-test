@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { getJob, upsertJob } from "@/lib/job-store";
 import { getOpenRouterClient } from "@/lib/openrouter";
-import type { VideoGenerationJob } from "@/lib/video-types";
+import type { PersistedVideoJob, VideoGenerationJob } from "@/lib/video-types";
 
 export async function GET(
   _request: Request,
@@ -22,8 +23,22 @@ export async function GET(
       usage: generation.usage,
     };
 
+    const existingJob = await getJob(jobId);
+
+    if (existingJob) {
+      const persistedJob: PersistedVideoJob = {
+        ...existingJob,
+        ...response,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await upsertJob(persistedJob);
+    }
+
     return NextResponse.json(response);
   } catch (error) {
+    console.error("Unable to load job status", error);
+
     const message =
       error instanceof Error ? error.message : "Unable to load job status.";
 
