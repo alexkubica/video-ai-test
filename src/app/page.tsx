@@ -589,7 +589,11 @@ export default function Home() {
       };
 
       if (!response.ok) {
-        throw new Error(payload.error ?? "Unable to start generation.");
+        const message = [payload.error, payload.errorHint]
+          .filter(Boolean)
+          .join(" ");
+        const nextError = new Error(message || "Unable to start generation.");
+        throw nextError;
       }
 
       setJob(payload);

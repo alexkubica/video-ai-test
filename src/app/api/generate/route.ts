@@ -18,6 +18,57 @@ function toOptionalNumber(value: unknown) {
   return undefined;
 }
 
+function classifyGenerationError(error: unknown) {
+  const fallback = {
+    hint: undefined as string | undefined,
+    message:
+      error instanceof Error ? error.message : "Unable to start generation.",
+    status: 500,
+    errorCode: "generation_failed",
+  };
+
+  if (
+    error &&
+    typeof error === "object" &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+  ) {
+    const statusCode = error.statusCode;
+    const body =
+      "body" in error && typeof error.body === "string" ? error.body : "";
+
+    if (statusCode === 401 && body.includes("User not found")) {
+      return {
+        errorCode: "openrouter_video_access_denied",
+        hint: "This OpenRouter key can reach the API, but your account is not currently allowed to create jobs on /api/v1/videos. Create a new key, verify billing/video access, or contact OpenRouter support with the 401 response details.",
+        message:
+          "OpenRouter accepted the API key for model listing, but rejected video job creation for this account.",
+        status: 401,
+      };
+    }
+
+    if (statusCode === 402) {
+      return {
+        errorCode: "openrouter_payment_required",
+        hint: "OpenRouter returned payment required. Check account credits and billing.",
+        message: "OpenRouter rejected the request due to billing or credits.",
+        status: 402,
+      };
+    }
+
+    if (statusCode === 429) {
+      return {
+        errorCode: "openrouter_rate_limited",
+        hint: "OpenRouter rate limited the request. Wait and retry.",
+        message: "OpenRouter rate limited the video generation request.",
+        status: 429,
+      };
+    }
+  }
+
+  return fallback;
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
@@ -89,9 +140,15 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Video generation request failed", error);
 
-    const message =
-      error instanceof Error ? error.message : "Unable to start generation.";
+    const classified = classifyGenerationError(error);
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: classified.message,
+        errorCode: classified.errorCode,
+        errorHint: classified.hint,
+      },
+      { status: classified.status },
+    );
   }
 }

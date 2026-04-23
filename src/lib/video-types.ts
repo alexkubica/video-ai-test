@@ -16,6 +16,8 @@ export type VideoModel = {
 };
 
 export type VideoGenerationJob = {
+  errorCode?: string;
+  errorHint?: string;
   error?: string;
   generationId?: string;
   id: string;
