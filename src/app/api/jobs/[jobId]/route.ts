@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
 
+import { auth } from "@/auth";
+import { getSessionEmail, isAllowedEmail, unauthorizedJson } from "@/lib/auth-helpers";
 import { getJob, upsertJob } from "@/lib/job-store";
 import { getApiKeyOverrideFromRequest, getOpenRouterClient } from "@/lib/openrouter";
 import type { PersistedVideoJob, VideoGenerationJob } from "@/lib/video-types";
 
-export async function GET(
-  request: Request,
+export const GET = auth(async (
+  request,
   { params }: { params: Promise<{ jobId: string }> },
-) {
+) => {
+  if (!isAllowedEmail(getSessionEmail(request.auth))) {
+    return unauthorizedJson();
+  }
+
   try {
     const { jobId } = await params;
     const openRouter = getOpenRouterClient(getApiKeyOverrideFromRequest(request));
@@ -46,4 +52,4 @@ export async function GET(
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
-}
+});

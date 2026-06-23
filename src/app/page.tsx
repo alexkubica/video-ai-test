@@ -52,6 +52,11 @@ type SupportedCombo = {
 };
 
 const POLL_INTERVAL_SECONDS = 10;
+const STARTER_PROMPTS = [
+  "A sleek product reveal on a reflective table, soft studio lighting, slow camera orbit, premium commercial feel.",
+  "Golden hour drone shot over a cliffside road, cinematic motion, rich contrast, realistic atmosphere.",
+  "A cozy coffee shop window in light rain, shallow depth of field, subtle people movement, filmic realism.",
+];
 
 const INITIAL_PROMPT =
   "A handheld dolly shot through a neon-lit night market during light rain, cinematic reflections, shallow depth of field, realistic motion, subtle crowd movement.";
@@ -242,18 +247,6 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
-}
-
-function formatElapsed(totalSeconds: number) {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function formatDurationCompact(totalSeconds: number) {
@@ -493,6 +486,20 @@ function readableBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function modelCapabilitySummary(model: VideoModel | null) {
+  if (!model) {
+    return "Loading model details";
+  }
+
+  const parts = [
+    model.generateAudio ? "audio" : "silent",
+    model.seed ? "repeatable takes" : null,
+    model.supportedFrameImages.length ? "frame control" : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return parts.join(" · ");
+}
+
 async function fileToReferenceImage(file: File): Promise<ReferenceImage> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -522,7 +529,6 @@ export default function Home() {
   const [jobHistory, setJobHistory] = useState<PersistedVideoJob[]>([]);
   const [job, setJob] = useState<VideoGenerationJob | null>(null);
   const [jobError, setJobError] = useState("");
-  const [lastPollAtMs, setLastPollAtMs] = useState<number | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [userApiKey, setUserApiKey] = useState(() => {
     if (typeof window === "undefined") {
@@ -696,15 +702,6 @@ export default function Home() {
         )
       : 0;
 
-  const nextPollAtMs =
-    job && !isTerminalStatus(job.status) && lastPollAtMs
-      ? lastPollAtMs + POLL_INTERVAL_SECONDS * 1000
-      : null;
-
-  const nextPollInSeconds = nextPollAtMs
-    ? Math.max(0, Math.ceil((nextPollAtMs - nowMs) / 1000))
-    : 0;
-
   const refreshHistory = useCallback(async () => {
     const response = await fetch("/api/history", { cache: "no-store" });
     const payload = (await response.json()) as {
@@ -736,7 +733,6 @@ export default function Home() {
     const jobs = await refreshHistory().catch(() => null);
     const persisted = jobs?.find((entry) => entry.id === jobId);
 
-    setLastPollAtMs(Date.now());
     setJob(persisted ?? payload);
     return persisted ?? payload;
   }, [authHeaders, refreshHistory]);
@@ -959,7 +955,6 @@ export default function Home() {
       }
 
       setJob(payload);
-      setLastPollAtMs(Date.now());
       const jobs = await refreshHistory();
       const persisted = jobs.find((entry) => entry.id === payload.id);
       setJob(persisted ?? payload);
@@ -977,190 +972,191 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8">
-      <section className="overflow-hidden rounded-[2rem] border border-[var(--border)] bg-[var(--panel)] shadow-[var(--shadow)] backdrop-blur">
-        <div className="grid gap-8 px-6 py-8 lg:grid-cols-[1.25fr_0.9fr] lg:px-10 lg:py-10">
+    <main className="mx-auto flex min-h-screen w-full max-w-[92rem] flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+      <section className="relative overflow-hidden rounded-[2rem] border border-[var(--border)] bg-[var(--panel)] px-5 py-5 shadow-[var(--shadow)] backdrop-blur sm:px-7 sm:py-7">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.9),transparent_34%),radial-gradient(circle_at_85%_15%,rgba(255,106,61,0.18),transparent_22%),linear-gradient(135deg,transparent,rgba(255,255,255,0.25))]" />
+        <div className="relative grid gap-5 lg:grid-cols-[1.35fr_0.8fr]">
           <div className="space-y-6">
-            <div className="inline-flex rounded-full border border-[var(--border)] bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-[var(--muted)]">
-              OpenRouter SDK + Vercel
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex rounded-full border border-[var(--border-strong)] bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--muted-strong)]">
+                Frameflow
+              </span>
+              <span className="text-sm text-[var(--muted)]">
+                Prompt in. Clip out.
+              </span>
             </div>
-            <div className="space-y-4">
-              <h1 className="max-w-3xl text-4xl font-semibold tracking-[-0.04em] text-[var(--foreground)] sm:text-5xl lg:text-6xl">
-                Generate text-to-video with the full OpenRouter catalog.
+
+            <div className="max-w-4xl space-y-4">
+              <h1 className="text-4xl font-semibold tracking-[-0.05em] text-[var(--foreground)] sm:text-5xl lg:text-7xl">
+                Make short videos with less setup.
               </h1>
               <p className="max-w-2xl text-base leading-7 text-[var(--muted)] sm:text-lg">
-                The model list is loaded live from OpenRouter’s video models API,
-                so newly added providers appear without a redeploy.
-              </p>
-              <p className="max-w-2xl rounded-[1.25rem] border border-[var(--border)] bg-white/60 px-4 py-3 text-sm leading-6 text-[var(--muted)]">
-                Discovery can come from OpenRouter’s
-                <code className="mx-1 rounded bg-black/5 px-1.5 py-0.5 text-[0.9em]">
-                  /api/v1/models?output_modalities=video
-                </code>
-                endpoint, but this app validates actual generation options from
-                <code className="mx-1 rounded bg-black/5 px-1.5 py-0.5 text-[0.9em]">
-                  /api/v1/videos/models
-                </code>
-                because that endpoint exposes the real resolution, aspect ratio,
-                size, duration, and frame-image support matrix.
+                Pick a model, describe the scene, and render. Advanced controls stay
+                available, but they no longer get in your way.
               </p>
             </div>
+
             <div className="grid gap-3 sm:grid-cols-3">
-              <article className="rounded-[1.5rem] border border-[var(--border)] bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
-                  Live Models
+              <article className="rounded-[1.4rem] border border-[var(--border)] bg-white/72 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Models live
                 </p>
                 <p className="mt-3 text-3xl font-semibold">{models.length}</p>
               </article>
-              <article className="rounded-[1.5rem] border border-[var(--border)] bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
-                  Audio Ready
+              <article className="rounded-[1.4rem] border border-[var(--border)] bg-white/72 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Audio-ready
                 </p>
                 <p className="mt-3 text-3xl font-semibold">
                   {models.filter((model) => model.generateAudio).length}
                 </p>
               </article>
-              <article className="rounded-[1.5rem] border border-[var(--border)] bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
-                  Top Resolution
+              <article className="rounded-[1.4rem] border border-[var(--border)] bg-white/72 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Best first try
                 </p>
-                <p className="mt-3 text-3xl font-semibold">4K</p>
+                <p className="mt-3 text-lg font-semibold">
+                  {selectedModel?.name ?? "Loading"}
+                </p>
               </article>
             </div>
           </div>
 
-          <aside className="rounded-[1.75rem] border border-[var(--border)] bg-[var(--panel-strong)] p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-[var(--muted)]">
-                  Selected model
-                </p>
-                <h2 className="mt-2 text-2xl font-semibold">
-                  {selectedModel?.name ?? "Loading"}
-                </h2>
-              </div>
-              {selectedModel ? (
+          <aside className="flex h-full flex-col justify-between rounded-[1.75rem] border border-[var(--border)] bg-[var(--panel-strong)] p-5">
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm text-[var(--muted)]">Current model</p>
+                  <h2 className="mt-2 text-2xl font-semibold">
+                    {selectedModel?.name ?? "Loading"}
+                  </h2>
+                </div>
                 <span
-                  className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusTone(
+                  className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${statusTone(
                     job?.status ?? "pending",
                   )}`}
                 >
                   {job?.status ?? "ready"}
                 </span>
-              ) : null}
-            </div>
-            <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
-              {selectedModel?.description ??
-                "Pick a model to inspect its supported durations, aspect ratios, pricing, and generation options."}
-            </p>
-            {selectedModel ? (
-              <div className="mt-6 space-y-4 text-sm">
-                <div className="flex flex-wrap gap-3">
-                  <a
-                    className="inline-flex items-center rounded-full border border-[var(--border)] bg-white/80 px-4 py-2 font-medium text-[var(--foreground)] hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
-                    href={getModelPageUrl(selectedModel.id)}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    OpenRouter model page
-                  </a>
-                  <a
-                    className="inline-flex items-center rounded-full border border-[var(--border)] bg-white/80 px-4 py-2 font-medium text-[var(--foreground)] hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
-                    href="https://openrouter.ai/docs/guides/overview/multimodal/video-generation/"
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Video API docs
-                  </a>
+              </div>
+
+              <p className="text-sm leading-6 text-[var(--muted)]">
+                {selectedModel?.description ??
+                  "Video settings will appear when the model list finishes loading."}
+              </p>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-[1.3rem] bg-white/78 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Good for
+                  </p>
+                  <p className="mt-2 text-sm font-semibold capitalize">
+                    {modelCapabilitySummary(selectedModel)}
+                  </p>
                 </div>
-                <div>
-                  <p className="font-medium text-[var(--foreground)]">Pricing</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {Object.entries(selectedModel.pricingSkus).map(
-                      ([sku, price]) => (
-                        <span
-                          key={sku}
-                          className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--accent-strong)]"
-                        >
-                          {sku}: ${price}
-                        </span>
-                      ),
-                    )}
-                    {!Object.keys(selectedModel.pricingSkus).length ? (
-                      <span className="rounded-full bg-black/5 px-3 py-1 text-xs text-[var(--muted)]">
-                        No pricing metadata
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-2xl bg-white/70 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                      Released
-                    </p>
-                    <p className="mt-2 font-medium">{formatDate(selectedModel.created)}</p>
-                  </div>
-                  <div className="rounded-2xl bg-white/70 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                      Capabilities
-                    </p>
-                    <p className="mt-2 font-medium">
-                      {selectedModel.generateAudio ? "Video + audio" : "Video only"}
-                      {selectedModel.seed ? " · Seeded" : ""}
-                      {selectedModel.supportedFrameImages.length ? " · Frame control" : ""}
-                    </p>
-                  </div>
+                <div className="rounded-[1.3rem] bg-white/78 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Released
+                  </p>
+                  <p className="mt-2 text-sm font-semibold">
+                    {selectedModel ? formatDate(selectedModel.created) : "Pending"}
+                  </p>
                 </div>
               </div>
-            ) : null}
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-3">
+              <a
+                className="inline-flex items-center rounded-full border border-[var(--border)] bg-white/80 px-4 py-2 text-sm font-medium hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
+                href={selectedModel ? getModelPageUrl(selectedModel.id) : "#"}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Model page
+              </a>
+              <a
+                className="inline-flex items-center rounded-full border border-[var(--border)] bg-white/80 px-4 py-2 text-sm font-medium hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
+                href="https://openrouter.ai/docs/guides/overview/multimodal/video-generation/"
+                rel="noreferrer"
+                target="_blank"
+              >
+                API docs
+              </a>
+            </div>
           </aside>
         </div>
       </section>
 
-      <section className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+      <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
         <form
-          className="space-y-6 rounded-[2rem] border border-[var(--border)] bg-[var(--panel)] p-6 shadow-[var(--shadow)] backdrop-blur"
+          className="space-y-5 rounded-[2rem] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[var(--shadow)] backdrop-blur sm:p-6"
           onSubmit={handleSubmit}
         >
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="user-api-key">
-              OpenRouter API key
-            </label>
-            <input
-              autoComplete="off"
-              className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
-              id="user-api-key"
-              onChange={handleApiKeyChange}
-              placeholder="Optional: use your own OpenRouter key from this browser"
-              type="password"
-              value={userApiKey}
-            />
-            <p className="text-sm leading-6 text-[var(--muted)]">
-              If set, this browser sends the key to your app server on each request
-              and stores it locally in browser storage only.
+          <div className="flex flex-col gap-3 rounded-[1.6rem] border border-[var(--border)] bg-white/72 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-[var(--foreground)]">
+                  Create
+                </p>
+                <p className="text-sm text-[var(--muted)]">
+                  Keep it simple. Start with the prompt and four settings.
+                </p>
+              </div>
+              <label className="min-w-[16rem] flex-1 sm:max-w-xs">
+                <span className="sr-only">OpenRouter API key</span>
+                <input
+                  autoComplete="off"
+                  className="w-full rounded-full border border-[var(--border)] bg-[var(--input)] px-4 py-3 text-sm outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(255,106,61,0.12)]"
+                  id="user-api-key"
+                  onChange={handleApiKeyChange}
+                  placeholder="Optional OpenRouter key"
+                  type="password"
+                  value={userApiKey}
+                />
+              </label>
+            </div>
+            <p className="text-xs leading-5 text-[var(--muted)]">
+              Your key stays in this browser unless requests are sent from it.
             </p>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="prompt">
+          <div className="space-y-3 rounded-[1.8rem] border border-[var(--border)] bg-[var(--panel-strong)] p-4 sm:p-5">
+            <label className="block text-sm font-medium" htmlFor="prompt">
               Prompt
             </label>
             <textarea
-              className="min-h-36 w-full rounded-[1.4rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(191,90,54,0.12)]"
+              className="min-h-44 w-full rounded-[1.5rem] border border-[var(--border)] bg-[var(--input)] px-4 py-4 text-base outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(255,106,61,0.12)]"
               id="prompt"
               onChange={(event) =>
                 setForm((current) => ({ ...current, prompt: event.target.value }))
               }
-              placeholder="Describe the shot, camera movement, motion, and style."
+              placeholder="A polished product reveal, dramatic lighting, slow camera move..."
               value={form.prompt}
             />
+            <div className="flex flex-wrap gap-2">
+              {STARTER_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  className="rounded-full border border-[var(--border)] bg-white/78 px-3 py-2 text-xs font-medium text-[var(--muted-strong)] hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      prompt,
+                    }))
+                  }
+                  type="button"
+                >
+                  Try a sample
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <label className="space-y-2 text-sm font-medium">
               <span>Model</span>
               <select
-                className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-[1.2rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(255,106,61,0.12)]"
                 onChange={(event) =>
                   setForm((current) => {
                     const nextModel = models.find(
@@ -1185,45 +1181,30 @@ export default function Home() {
             </label>
 
             <label className="space-y-2 text-sm font-medium">
-              <span>Resolution</span>
+              <span>Length</span>
               <select
-                className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
-                disabled={!availableResolutions.length}
+                className="w-full rounded-[1.2rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(255,106,61,0.12)]"
+                disabled={!selectedModel?.supportedDurations.length}
                 onChange={(event) =>
-                  setForm((current) => {
-                    const nextResolution = event.target.value;
-                    const nextAspect =
-                      supportedCombos.find(
-                        (combo) =>
-                          combo.resolution === nextResolution &&
-                          combo.aspectRatio === current.aspectRatio,
-                      )?.aspectRatio ??
-                      supportedCombos.find(
-                        (combo) => combo.resolution === nextResolution,
-                      )?.aspectRatio ??
-                      current.aspectRatio;
-
-                    return {
-                      ...current,
-                      aspectRatio: nextAspect,
-                      resolution: nextResolution,
-                    };
-                  })
+                  setForm((current) => ({
+                    ...current,
+                    duration: event.target.value,
+                  }))
                 }
-                value={form.resolution}
+                value={form.duration}
               >
-                {availableResolutions.map((resolution) => (
-                  <option key={resolution} value={resolution}>
-                    {resolution}
+                {selectedModel?.supportedDurations.map((duration) => (
+                  <option key={duration} value={duration}>
+                    {duration}s
                   </option>
                 ))}
               </select>
             </label>
 
             <label className="space-y-2 text-sm font-medium">
-              <span>Aspect ratio</span>
+              <span>Format</span>
               <select
-                className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-[1.2rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(255,106,61,0.12)]"
                 disabled={!availableAspectRatios.length}
                 onChange={(event) =>
                   setForm((current) => {
@@ -1257,245 +1238,264 @@ export default function Home() {
             </label>
 
             <label className="space-y-2 text-sm font-medium">
-              <span>Duration</span>
+              <span>Quality</span>
               <select
-                className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
-                disabled={!selectedModel?.supportedDurations.length}
+                className="w-full rounded-[1.2rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(255,106,61,0.12)]"
+                disabled={!availableResolutions.length}
                 onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    duration: event.target.value,
-                  }))
+                  setForm((current) => {
+                    const nextResolution = event.target.value;
+                    const nextAspect =
+                      supportedCombos.find(
+                        (combo) =>
+                          combo.resolution === nextResolution &&
+                          combo.aspectRatio === current.aspectRatio,
+                      )?.aspectRatio ??
+                      supportedCombos.find(
+                        (combo) => combo.resolution === nextResolution,
+                      )?.aspectRatio ??
+                      current.aspectRatio;
+
+                    return {
+                      ...current,
+                      aspectRatio: nextAspect,
+                      resolution: nextResolution,
+                    };
+                  })
                 }
-                value={form.duration}
+                value={form.resolution}
               >
-                {selectedModel?.supportedDurations.map((duration) => (
-                  <option key={duration} value={duration}>
-                    {duration}s
+                {availableResolutions.map((resolution) => (
+                  <option key={resolution} value={resolution}>
+                    {resolution}
                   </option>
                 ))}
               </select>
             </label>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-[1fr_auto]">
-            <label className="space-y-2 text-sm font-medium">
-              <span>Seed</span>
-              <input
-                className="w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 outline-none focus:border-[var(--accent)]"
-                disabled={!selectedModel?.seed}
-                inputMode="numeric"
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, seed: event.target.value }))
-                }
-                placeholder={
-                  selectedModel?.seed ? "Optional deterministic seed" : "Unsupported"
-                }
-                value={form.seed}
-              />
-            </label>
-
-            <label className="flex items-end gap-3 rounded-[1.1rem] border border-[var(--border)] bg-white/70 px-4 py-3 text-sm font-medium">
-              <input
-                checked={form.generateAudio}
-                disabled={!selectedModel?.generateAudio}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    generateAudio: event.target.checked,
-                  }))
-                }
-                type="checkbox"
-              />
-              Generate audio
-            </label>
-          </div>
-
-          <div className="space-y-3">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-3 rounded-[1.4rem] border border-[var(--border)] bg-white/70 p-4">
-                <div className="flex items-center justify-between gap-4">
-                  <label className="text-sm font-medium" htmlFor="first-frame-image">
-                    First frame
-                  </label>
-                  <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
-                    Image-to-video
-                  </span>
-                </div>
-                <input
-                  accept="image/*"
-                  className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
-                  disabled={!selectedModel?.supportedFrameImages.includes("first_frame")}
-                  id="first-frame-image"
-                  onChange={(event) =>
-                    handleFrameImageChange(event, "firstFrameImage")
-                  }
-                  type="file"
-                />
-                {form.firstFrameImage ? (
-                  <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--panel)] p-3 text-sm">
-                    <span className="truncate">{form.firstFrameImage.name}</span>
-                    <button
-                      className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium"
-                      onClick={() => removeFrameImage("firstFrameImage")}
-                      type="button"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : null}
+          {estimate ? (
+            <div className="grid gap-3 rounded-[1.7rem] border border-[var(--border)] bg-white/72 p-4 sm:grid-cols-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Estimated cost
+                </p>
+                <p className="mt-2 text-xl font-semibold">{estimate.costLabel}</p>
               </div>
-
-              <div className="space-y-3 rounded-[1.4rem] border border-[var(--border)] bg-white/70 p-4">
-                <div className="flex items-center justify-between gap-4">
-                  <label className="text-sm font-medium" htmlFor="last-frame-image">
-                    Last frame
-                  </label>
-                  <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
-                    Image-to-video
-                  </span>
-                </div>
-                <input
-                  accept="image/*"
-                  className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
-                  disabled={!selectedModel?.supportedFrameImages.includes("last_frame")}
-                  id="last-frame-image"
-                  onChange={(event) =>
-                    handleFrameImageChange(event, "lastFrameImage")
-                  }
-                  type="file"
-                />
-                {form.lastFrameImage ? (
-                  <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--panel)] p-3 text-sm">
-                    <span className="truncate">{form.lastFrameImage.name}</span>
-                    <button
-                      className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium"
-                      onClick={() => removeFrameImage("lastFrameImage")}
-                      type="button"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : null}
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Render size
+                </p>
+                <p className="mt-2 text-xl font-semibold">
+                  {estimate.size?.label ?? "Unknown"}
+                </p>
               </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Tokens
+                </p>
+                <p className="mt-2 text-xl font-semibold">
+                  {estimate.videoTokens?.toLocaleString() ?? "N/A"}
+                </p>
+              </div>
+              <p className="sm:col-span-3 text-sm leading-6 text-[var(--muted)]">
+                {estimate.method}
+              </p>
             </div>
+          ) : null}
 
-            <div className="flex items-center justify-between gap-4">
-              <label className="text-sm font-medium" htmlFor="reference-images">
-                Input references
-              </label>
-              <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
-                Multi-upload
+          <details className="group rounded-[1.7rem] border border-[var(--border)] bg-white/70 p-4">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-[var(--foreground)]">
+                  Advanced
+                </p>
+                <p className="text-sm text-[var(--muted)]">
+                  Seed, audio, frames, and references.
+                </p>
+              </div>
+              <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)] transition-transform group-open:rotate-45">
+                +
               </span>
-            </div>
-            <input
-              accept="image/*"
-              className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-white/80 px-4 py-3 text-sm file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
-              id="reference-images"
-              multiple
-              onChange={handleReferenceImageChange}
-              type="file"
-            />
-            <p className="text-sm leading-6 text-[var(--muted)]">
-              OpenRouter supports `frame_images` for `first_frame` and `last_frame`,
-              and `input_references` for multiple reference images. If both are sent,
-              `frame_images` takes precedence and the request is treated as image-to-video.
-            </p>
-            {form.referenceImages.length ? (
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {form.referenceImages.map((image) => (
-                  <div
-                    key={image.id}
-                    className="overflow-hidden rounded-[1.4rem] border border-[var(--border)] bg-white/70"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      alt={image.name}
-                      className="aspect-square w-full object-cover"
-                      src={image.dataUrl}
-                    />
-                    <div className="space-y-2 p-3">
-                      <p className="truncate text-sm font-medium">{image.name}</p>
-                      <p className="text-xs text-[var(--muted)]">
-                        {readableBytes(image.size)}
-                      </p>
+            </summary>
+
+            <div className="mt-5 space-y-5">
+              <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                <label className="space-y-2 text-sm font-medium">
+                  <span>Seed</span>
+                  <input
+                    className="w-full rounded-[1.2rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 outline-none focus:border-[var(--accent)] focus:ring-4 focus:ring-[color:rgba(255,106,61,0.12)]"
+                    disabled={!selectedModel?.seed}
+                    inputMode="numeric"
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        seed: event.target.value,
+                      }))
+                    }
+                    placeholder={
+                      selectedModel?.seed ? "Optional" : "Not supported"
+                    }
+                    value={form.seed}
+                  />
+                </label>
+
+                <label className="flex items-end gap-3 rounded-[1.2rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 text-sm font-medium">
+                  <input
+                    checked={form.generateAudio}
+                    disabled={!selectedModel?.generateAudio}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        generateAudio: event.target.checked,
+                      }))
+                    }
+                    type="checkbox"
+                  />
+                  Audio
+                </label>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-3 rounded-[1.4rem] border border-[var(--border)] bg-[var(--panel)] p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <label className="text-sm font-medium" htmlFor="first-frame-image">
+                      First frame
+                    </label>
+                    <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                      Optional
+                    </span>
+                  </div>
+                  <input
+                    accept="image/*"
+                    className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 text-sm file:mr-3 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
+                    disabled={!selectedModel?.supportedFrameImages.includes("first_frame")}
+                    id="first-frame-image"
+                    onChange={(event) =>
+                      handleFrameImageChange(event, "firstFrameImage")
+                    }
+                    type="file"
+                  />
+                  {form.firstFrameImage ? (
+                    <div className="flex items-center justify-between gap-3 rounded-[1rem] bg-white/80 p-3 text-sm">
+                      <span className="truncate">{form.firstFrameImage.name}</span>
                       <button
-                        className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
-                        onClick={() => removeReferenceImage(image.id)}
+                        className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium"
+                        onClick={() => removeFrameImage("firstFrameImage")}
                         type="button"
                       >
                         Remove
                       </button>
                     </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
+                  ) : null}
+                </div>
 
-          {estimate ? (
-            <div className="space-y-4 rounded-[1.6rem] border border-[var(--border)] bg-white/70 p-4">
-              <div className="flex items-center justify-between gap-4">
-                <p className="text-sm font-medium text-[var(--foreground)]">
-                  Job estimator
+                <div className="space-y-3 rounded-[1.4rem] border border-[var(--border)] bg-[var(--panel)] p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <label className="text-sm font-medium" htmlFor="last-frame-image">
+                      Last frame
+                    </label>
+                    <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                      Optional
+                    </span>
+                  </div>
+                  <input
+                    accept="image/*"
+                    className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 text-sm file:mr-3 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
+                    disabled={!selectedModel?.supportedFrameImages.includes("last_frame")}
+                    id="last-frame-image"
+                    onChange={(event) =>
+                      handleFrameImageChange(event, "lastFrameImage")
+                    }
+                    type="file"
+                  />
+                  {form.lastFrameImage ? (
+                    <div className="flex items-center justify-between gap-3 rounded-[1rem] bg-white/80 p-3 text-sm">
+                      <span className="truncate">{form.lastFrameImage.name}</span>
+                      <button
+                        className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium"
+                        onClick={() => removeFrameImage("lastFrameImage")}
+                        type="button"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <label className="text-sm font-medium" htmlFor="reference-images">
+                    Reference images
+                  </label>
+                  <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                    Multi-upload
+                  </span>
+                </div>
+                <input
+                  accept="image/*"
+                  className="block w-full rounded-[1.1rem] border border-[var(--border)] bg-[var(--input)] px-4 py-3 text-sm file:mr-3 file:rounded-full file:border-0 file:bg-[var(--accent-soft)] file:px-4 file:py-2 file:font-medium file:text-[var(--accent-strong)]"
+                  id="reference-images"
+                  multiple
+                  onChange={handleReferenceImageChange}
+                  type="file"
+                />
+                <p className="text-sm leading-6 text-[var(--muted)]">
+                  Use reference images to steer the look. If frame images are also
+                  present, they take priority.
                 </p>
-                <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--accent-strong)]">
-                  Live pricing metadata
-                </span>
+                {form.referenceImages.length ? (
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {form.referenceImages.map((image) => (
+                      <div
+                        key={image.id}
+                        className="overflow-hidden rounded-[1.3rem] border border-[var(--border)] bg-white/78"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          alt={image.name}
+                          className="aspect-square w-full object-cover"
+                          src={image.dataUrl}
+                        />
+                        <div className="space-y-2 p-3">
+                          <p className="truncate text-sm font-medium">{image.name}</p>
+                          <p className="text-xs text-[var(--muted)]">
+                            {readableBytes(image.size)}
+                          </p>
+                          <button
+                            className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-medium hover:border-[var(--accent)] hover:text-[var(--accent-strong)]"
+                            onClick={() => removeReferenceImage(image.id)}
+                            type="button"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl bg-[var(--panel)] p-4">
-                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                    Estimated cost
-                  </p>
-                  <p className="mt-2 text-lg font-semibold">{estimate.costLabel}</p>
-                </div>
-                <div className="rounded-2xl bg-[var(--panel)] p-4">
-                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                    Video tokens
-                  </p>
-                  <p className="mt-2 text-lg font-semibold">
-                    {estimate.videoTokens?.toLocaleString() ?? "N/A"}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-[var(--panel)] p-4">
-                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                    Size basis
-                  </p>
-                  <p className="mt-2 text-lg font-semibold">
-                    {estimate.size?.label ?? "Unknown"}
-                  </p>
-                </div>
-              </div>
-              <p className="text-sm leading-6 text-[var(--muted)]">
-                {estimate.method}
-              </p>
-              <p className="text-xs leading-5 text-[var(--muted)]">
-                Token estimate is shown when the selected model exposes token-style
-                pricing. The formula is model-specific and currently aligns with
-                OpenRouter’s token-based video model pages rather than a universal
-                cross-provider contract.
-              </p>
             </div>
-          ) : null}
+          </details>
 
           {modelsError ? (
-            <p className="rounded-2xl bg-rose-100 px-4 py-3 text-sm text-rose-800">
+            <p className="rounded-[1.2rem] bg-rose-100 px-4 py-3 text-sm text-rose-800">
               {modelsError}
             </p>
           ) : null}
 
           {jobError ? (
-            <p className="rounded-2xl bg-rose-100 px-4 py-3 text-sm text-rose-800">
+            <p className="rounded-[1.2rem] bg-rose-100 px-4 py-3 text-sm text-rose-800">
               {jobError}
             </p>
           ) : null}
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 rounded-[1.8rem] border border-[var(--border)] bg-[var(--panel-strong)] p-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-[var(--muted)]">
               {isLoadingModels
-                ? "Loading current OpenRouter video models..."
-                : "Submitting creates an async job and starts live polling."}
+                ? "Loading available video models..."
+                : "Rendering starts an async job and updates automatically."}
             </p>
             <button
               className="inline-flex items-center justify-center rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-white hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
@@ -1507,192 +1507,227 @@ export default function Home() {
               }
               type="submit"
             >
-              {isSubmitting ? "Submitting..." : "Generate video"}
+              {isSubmitting ? "Starting render..." : "Generate video"}
             </button>
           </div>
         </form>
 
-        <section className="space-y-6 rounded-[2rem] border border-[var(--border)] bg-[var(--panel)] p-6 shadow-[var(--shadow)] backdrop-blur">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium text-[var(--muted)]">
-                Latest generation
-              </p>
-              <h2 className="mt-2 text-2xl font-semibold">
-                {job ? `Job ${job.id}` : "No job yet"}
-              </h2>
-            </div>
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusTone(
-                job?.status ?? "pending",
-              )}`}
-            >
-              {job?.status ?? "idle"}
-            </span>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <article className="rounded-2xl bg-white/70 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                {job && isTerminalStatus(job.status)
-                  ? "Generation time"
-                  : "Time since submit"}
-              </p>
-              <p className="mt-2 text-lg font-semibold">
-                {job
-                  ? isTerminalStatus(job.status)
-                    ? formatDurationCompact(jobElapsedSeconds)
-                    : formatElapsed(jobElapsedSeconds)
-                  : "0s"}
-              </p>
-            </article>
-            <article className="rounded-2xl bg-white/70 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                Submitted
-              </p>
-              <p className="mt-2 text-sm font-semibold">
-                {job?.createdAt ? formatDateTime(job.createdAt) : "Pending"}
-              </p>
-            </article>
-            <article className="rounded-2xl bg-white/70 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                {job && !isTerminalStatus(job.status)
-                  ? "Next poll"
-                  : "Last update"}
-              </p>
-              <p className="mt-2 text-sm font-semibold">
-                {job && !isTerminalStatus(job.status)
-                  ? `${nextPollInSeconds}s`
-                  : job?.updatedAt
-                    ? formatDateTime(job.updatedAt)
-                    : "Pending"}
-              </p>
-            </article>
-          </div>
-
-          <div className="rounded-[1.6rem] border border-dashed border-[var(--border)] bg-white/60 p-4">
-            {job?.status === "completed" &&
-            videoObjectUrl &&
-            videoObjectJobId === job.id ? (
-              <video
-                className="aspect-video w-full rounded-[1.2rem] bg-[#120d0a] object-cover"
-                controls
-                src={videoObjectUrl}
-              />
-            ) : (
-              <div className="flex aspect-video items-center justify-center rounded-[1.2rem] bg-[linear-gradient(135deg,rgba(191,90,54,0.12),rgba(255,255,255,0.8))] p-6 text-center text-sm leading-6 text-[var(--muted)]">
-                {job?.status === "completed"
-                  ? "OpenRouter marked the job complete. Loading playable video..."
-                  : "Generated clips will appear here as soon as OpenRouter marks the job complete."}
+        <section className="space-y-5 rounded-[2rem] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[var(--shadow)] backdrop-blur sm:p-6">
+          <div className="rounded-[1.8rem] border border-[var(--border)] bg-[var(--panel-strong)] p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm text-[var(--muted)]">Latest render</p>
+                <h2 className="mt-2 text-2xl font-semibold">
+                  {job ? `Job ${job.id}` : "Nothing rendered yet"}
+                </h2>
               </div>
-            )}
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <article className="rounded-2xl bg-white/70 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                Cost
-              </p>
-              <p className="mt-2 text-lg font-semibold">
-                {formatCurrency(job?.usage?.cost)}
-              </p>
-            </article>
-            <article className="rounded-2xl bg-white/70 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                Generation ID
-              </p>
-              <p className="mt-2 truncate text-lg font-semibold">
-                {job?.generationId ?? "Pending"}
-              </p>
-            </article>
-          </div>
-
-          {job?.error ? (
-            <p className="rounded-2xl bg-rose-100 px-4 py-3 text-sm text-rose-800">
-              {job.error}
-            </p>
-          ) : null}
-
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-[var(--foreground)]">
-              Supported controls for this model
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {(selectedModel?.allowedPassthroughParameters.length
-                ? selectedModel.allowedPassthroughParameters
-                : ["No passthrough parameters exposed"]).map((item) => (
-                <span
-                  key={item}
-                  className="rounded-full border border-[var(--border)] bg-white/70 px-3 py-1 text-xs text-[var(--muted)]"
-                >
-                  {item}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <p className="text-sm font-medium text-[var(--foreground)]">
-                Local job history
-              </p>
-              <span className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
-                Stored in `.data/video-jobs.json`
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${statusTone(
+                  job?.status ?? "pending",
+                )}`}
+              >
+                {job?.status ?? "idle"}
               </span>
             </div>
-            <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
-              {jobHistory.length ? (
-                jobHistory.map((historyJob) => (
-                  <button
-                    key={historyJob.id}
-                    className="w-full rounded-[1.2rem] border border-[var(--border)] bg-white/70 p-4 text-left hover:border-[var(--accent)]"
-                    onClick={() => {
-                      setJob(historyJob);
-                      setJobError("");
-                      void refreshSelectedJob(historyJob.id).catch((error) => {
-                        setJobError(
-                          error instanceof Error
-                            ? error.message
-                            : "Unable to refresh job status.",
-                        );
-                      });
-                    }}
-                    type="button"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="truncate text-sm font-semibold">
-                        {historyJob.model}
-                      </p>
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${statusTone(
-                          historyJob.status,
-                        )}`}
-                      >
-                        {historyJob.status}
-                      </span>
-                    </div>
-                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
-                      {historyJob.prompt}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-[var(--muted)]">
-                      <span>{formatDateTime(historyJob.createdAt)}</span>
-                      <span>{historyJob.resolution ?? "No resolution"}</span>
-                      <span>
-                        {historyJob.duration ? `${historyJob.duration}s` : "No duration"}
-                      </span>
-                      <span>
-                        {historyJob.referenceImageCount} reference
-                        {historyJob.referenceImageCount === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                  </button>
-                ))
+
+            <div className="mt-4 rounded-[1.5rem] border border-dashed border-[var(--border)] bg-white/65 p-3">
+              {job?.status === "completed" &&
+              videoObjectUrl &&
+              videoObjectJobId === job.id ? (
+                <video
+                  className="aspect-video w-full rounded-[1.2rem] bg-[#100d11] object-cover"
+                  controls
+                  src={videoObjectUrl}
+                />
               ) : (
-                <div className="rounded-[1.2rem] border border-dashed border-[var(--border)] bg-white/60 p-4 text-sm text-[var(--muted)]">
-                  No persisted jobs yet.
+                <div className="flex aspect-video items-center justify-center rounded-[1.2rem] bg-[linear-gradient(135deg,rgba(255,106,61,0.12),rgba(18,25,40,0.04),rgba(255,255,255,0.82))] p-6 text-center text-sm leading-6 text-[var(--muted)]">
+                  {job?.status === "completed"
+                    ? "Render is ready. Loading the preview now."
+                    : "Your finished clip will show up here."}
                 </div>
               )}
             </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <article className="rounded-[1.2rem] bg-white/78 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  {job && isTerminalStatus(job.status) ? "Render time" : "Started"}
+                </p>
+                <p className="mt-2 text-lg font-semibold">
+                  {job
+                    ? isTerminalStatus(job.status)
+                      ? formatDurationCompact(jobElapsedSeconds)
+                      : job.createdAt
+                        ? formatDateTime(job.createdAt)
+                        : "Pending"
+                    : "Pending"}
+                </p>
+              </article>
+              <article className="rounded-[1.2rem] bg-white/78 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Submitted
+                </p>
+                <p className="mt-2 text-sm font-semibold">
+                  {job?.createdAt ? formatDateTime(job.createdAt) : "Pending"}
+                </p>
+              </article>
+              <article className="rounded-[1.2rem] bg-white/78 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Updated
+                </p>
+                <p className="mt-2 text-sm font-semibold">
+                  {job?.updatedAt ? formatDateTime(job.updatedAt) : "Pending"}
+                </p>
+              </article>
+              <article className="rounded-[1.2rem] bg-white/78 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Cost
+                </p>
+                <p className="mt-2 text-lg font-semibold">
+                  {formatCurrency(job?.usage?.cost)}
+                </p>
+              </article>
+            </div>
+
+            {job?.error ? (
+              <p className="mt-4 rounded-[1.2rem] bg-rose-100 px-4 py-3 text-sm text-rose-800">
+                {job.error}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-[0.95fr_1.05fr]">
+            <section className="space-y-4 rounded-[1.7rem] border border-[var(--border)] bg-white/72 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-[var(--foreground)]">
+                    Selected model
+                  </p>
+                  <p className="text-sm text-[var(--muted)]">
+                    Simple summary of what it can do.
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-[1.3rem] bg-[var(--panel)] p-4">
+                <p className="text-lg font-semibold">
+                  {selectedModel?.name ?? "Loading"}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                  {selectedModel?.description ??
+                    "Model details will appear here once loaded."}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Extra controls
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(selectedModel?.allowedPassthroughParameters.length
+                    ? selectedModel.allowedPassthroughParameters
+                    : ["No extra controls exposed"]).map((item) => (
+                    <span
+                      key={item}
+                      className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-1 text-xs text-[var(--muted-strong)]"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {selectedModel ? (
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Pricing signals
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(selectedModel.pricingSkus).length ? (
+                      Object.entries(selectedModel.pricingSkus).map(([sku, price]) => (
+                        <span
+                          key={sku}
+                          className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--accent-strong)]"
+                        >
+                          {sku}: ${price}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-1 text-xs text-[var(--muted)]">
+                        No pricing metadata
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="space-y-4 rounded-[1.7rem] border border-[var(--border)] bg-white/72 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-[var(--foreground)]">
+                    Recent renders
+                  </p>
+                  <p className="text-sm text-[var(--muted)]">
+                    Saved in Neon.
+                  </p>
+                </div>
+              </div>
+
+              <div className="max-h-[36rem] space-y-3 overflow-y-auto pr-1">
+                {jobHistory.length ? (
+                  jobHistory.map((historyJob) => (
+                    <button
+                      key={historyJob.id}
+                      className="w-full rounded-[1.3rem] border border-[var(--border)] bg-[var(--panel)] p-4 text-left hover:border-[var(--accent)]"
+                      onClick={() => {
+                        setJob(historyJob);
+                        setJobError("");
+                        void refreshSelectedJob(historyJob.id).catch((error) => {
+                          setJobError(
+                            error instanceof Error
+                              ? error.message
+                              : "Unable to refresh job status.",
+                          );
+                        });
+                      }}
+                      type="button"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="truncate text-sm font-semibold">
+                          {historyJob.model}
+                        </p>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${statusTone(
+                            historyJob.status,
+                          )}`}
+                        >
+                          {historyJob.status}
+                        </span>
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
+                        {historyJob.prompt}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-[var(--muted)]">
+                        <span>{formatDateTime(historyJob.createdAt)}</span>
+                        <span>{historyJob.resolution ?? "No quality"}</span>
+                        <span>
+                          {historyJob.duration ? `${historyJob.duration}s` : "No length"}
+                        </span>
+                        <span>
+                          {historyJob.referenceImageCount} reference
+                          {historyJob.referenceImageCount === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="rounded-[1.3rem] border border-dashed border-[var(--border)] bg-[var(--panel)] p-4 text-sm text-[var(--muted)]">
+                    No renders yet.
+                  </div>
+                )}
+              </div>
+            </section>
           </div>
         </section>
       </section>

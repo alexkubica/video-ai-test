@@ -6,6 +6,8 @@ import type {
   Resolution,
 } from "@openrouter/sdk/models";
 
+import { auth } from "@/auth";
+import { getSessionEmail, isAllowedEmail, unauthorizedJson } from "@/lib/auth-helpers";
 import { upsertJob } from "@/lib/job-store";
 import { getApiKeyOverrideFromRequest, getOpenRouterClient } from "@/lib/openrouter";
 import type { PersistedVideoJob, VideoGenerationJob } from "@/lib/video-types";
@@ -74,7 +76,11 @@ function classifyGenerationError(error: unknown) {
   return fallback;
 }
 
-export async function POST(request: Request) {
+export const POST = auth(async (request) => {
+  if (!isAllowedEmail(getSessionEmail(request.auth))) {
+    return unauthorizedJson();
+  }
+
   try {
     const body = (await request.json()) as {
       aspectRatio?: string;
@@ -161,4 +167,4 @@ export async function POST(request: Request) {
       { status: classified.status },
     );
   }
-}
+});

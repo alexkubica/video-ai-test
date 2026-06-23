@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { auth } from "@/auth";
+import { getSessionEmail, isAllowedEmail, unauthorizedJson } from "@/lib/auth-helpers";
 import { getApiKeyOverrideFromRequest, getOpenRouterClient } from "@/lib/openrouter";
 import type { VideoModel } from "@/lib/video-types";
 
@@ -37,7 +39,11 @@ function normalizeModel(model: {
   };
 }
 
-export async function GET(request: Request) {
+export const GET = auth(async (request) => {
+  if (!isAllowedEmail(getSessionEmail(request.auth))) {
+    return unauthorizedJson();
+  }
+
   try {
     const openRouter = getOpenRouterClient(getApiKeyOverrideFromRequest(request));
     const result = await openRouter.videoGeneration.listVideosModels();
@@ -55,4 +61,4 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
-}
+});

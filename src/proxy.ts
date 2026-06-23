@@ -1,65 +1,46 @@
-import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { getSessionEmail, isAllowedEmail, unauthorizedJson } from "@/lib/auth-helpers";
 
-function unauthorizedResponse() {
-  return new NextResponse("Authentication required.", {
-    headers: {
-      "WWW-Authenticate": 'Basic realm="OpenRouter Video Studio"',
-    },
-    status: 401,
-  });
-}
+const PUBLIC_PATHS = new Set(["/sign-in"]);
 
-function decodeCredentials(header: string) {
-  const [scheme, encoded] = header.split(" ");
+const authProxy = auth((request) => {
+  const { nextUrl } = request;
+  const { pathname, search } = nextUrl;
 
-  if (scheme !== "Basic" || !encoded) {
-    return null;
-  }
-
-  try {
-    const decoded = atob(encoded);
-    const separatorIndex = decoded.indexOf(":");
-
-    if (separatorIndex === -1) {
-      return null;
-    }
-
-    return {
-      password: decoded.slice(separatorIndex + 1),
-      username: decoded.slice(0, separatorIndex),
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function proxy(request: NextRequest) {
-  const username = process.env.APP_BASIC_AUTH_USERNAME;
-  const password = process.env.APP_BASIC_AUTH_PASSWORD;
-
-  if (!username || !password) {
+  if (pathname.startsWith("/api/auth")) {
     return NextResponse.next();
   }
 
-  const authHeader = request.headers.get("authorization");
+  const authorized = isAllowedEmail(getSessionEmail(request.auth));
 
-  if (!authHeader) {
-    return unauthorizedResponse();
+  if (PUBLIC_PATHS.has(pathname)) {
+    if (authorized) {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
+
+    return NextResponse.next();
   }
 
-  const credentials = decodeCredentials(authHeader);
-
-  if (
-    !credentials ||
-    credentials.username !== username ||
-    credentials.password !== password
-  ) {
-    return unauthorizedResponse();
+  if (authorized) {
+    return NextResponse.next();
   }
 
-  return NextResponse.next();
-}
+  if (pathname.startsWith("/api/")) {
+    return unauthorizedJson();
+  }
+
+  const signInUrl = new URL("/sign-in", request.url);
+  const callbackUrl = `${pathname}${search}`;
+
+  if (callbackUrl && callbackUrl !== "/") {
+    signInUrl.searchParams.set("callbackUrl", callbackUrl);
+  }
+
+  return NextResponse.redirect(signInUrl);
+});
+
+export { authProxy as proxy };
 
 export const config = {
   matcher: [

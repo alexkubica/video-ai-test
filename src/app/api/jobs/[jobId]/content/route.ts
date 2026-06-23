@@ -1,3 +1,5 @@
+import { auth } from "@/auth";
+import { getSessionEmail, isAllowedEmail, unauthorizedJson } from "@/lib/auth-helpers";
 import { getApiKeyOverrideFromRequest } from "@/lib/openrouter";
 
 function toSafeIndex(value: string | null) {
@@ -9,10 +11,14 @@ function toSafeIndex(value: string | null) {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-export async function GET(
-  request: Request,
+export const GET = auth(async (
+  request,
   { params }: { params: Promise<{ jobId: string }> },
-) {
+) => {
+  if (!isAllowedEmail(getSessionEmail(request.auth))) {
+    return unauthorizedJson();
+  }
+
   try {
     const { jobId } = await params;
     const { searchParams } = new URL(request.url);
@@ -82,4 +88,4 @@ export async function GET(
       { status: 500 },
     );
   }
-}
+});
