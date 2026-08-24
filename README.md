@@ -8,14 +8,15 @@ The app:
 - Submits text-to-video jobs against any currently available model
 - Polls async generation status until the clip is ready
 - Surfaces pricing, supported durations, aspect ratios, resolutions, audio support, and seed support
-- Supports app-level Basic Auth so the deployment can be access-restricted before anyone reaches your OpenRouter-backed routes
+- Uses Google sign-in with an exact server-side email allowlist before anyone
+  reaches OpenRouter-backed pages or API routes
 
 ## Local development
 
 1. Install dependencies:
 
 ```bash
-npm --userconfig /dev/null install
+npm ci
 ```
 
 2. Copy the environment file:
@@ -24,16 +25,10 @@ npm --userconfig /dev/null install
 cp .env.example .env.local
 ```
 
-3. Set `OPENROUTER_API_KEY` in `.env.local`.
+3. Replace every placeholder. `AUTHORIZED_EMAIL` is the only account allowed to
+   sign in; missing auth configuration fails closed.
 
-4. To protect the app locally and in production, also set:
-
-```env
-APP_BASIC_AUTH_USERNAME=your_username
-APP_BASIC_AUTH_PASSWORD=a_long_random_password
-```
-
-5. Start the app:
+4. Start the app:
 
 ```bash
 npm run dev
@@ -44,10 +39,13 @@ npm run dev
 Set these environment variables in Vercel:
 
 - `OPENROUTER_API_KEY`
+- `DATABASE_URL`
+- `AUTH_SECRET`
+- `AUTH_GOOGLE_ID`
+- `AUTH_GOOGLE_SECRET`
+- `AUTHORIZED_EMAIL`
 - `OPENROUTER_APP_NAME`
 - `OPENROUTER_SITE_URL`
-- `APP_BASIC_AUTH_USERNAME`
-- `APP_BASIC_AUTH_PASSWORD`
 
 Then deploy with:
 
@@ -63,10 +61,19 @@ vercel --prod
 
 ## Protecting access
 
-This project includes middleware-based HTTP Basic Auth. If `APP_BASIC_AUTH_USERNAME` and `APP_BASIC_AUTH_PASSWORD` are set, both the frontend and API routes require credentials before use.
+This project uses Auth.js with Google OAuth. The proxy and every sensitive API
+handler independently require a session whose normalized email exactly matches
+`AUTHORIZED_EMAIL`.
 
 That means:
 
 - Your OpenRouter API key remains server-side only
 - Casual public visitors cannot use the UI or call your generation endpoints
 - This protection works regardless of whether Vercel production URLs are public on your plan
+
+## Verification and publication
+
+Run `npm run lint`, `npm run typecheck`, and `npm run build`. See
+`docs/PUBLICATION.md` for the remaining release checks.
+
+No open-source license has been selected; normal copyright restrictions apply.
